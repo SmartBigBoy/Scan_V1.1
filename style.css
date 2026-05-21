@@ -550,8 +550,26 @@ html, body {
     cursor: grabbing;
 }
 
+/* Magnifying glass effect on press */
 .corner-handle:active::before {
-    transform: translate(-50%, -50%) scale(1.15);
+    transform: translate(-50%, -50%) scale(3);
+    background: rgba(255,255,255,0.06);
+    border: 1.5px solid rgba(255,255,255,0.9);
+    box-shadow: 0 0 24px rgba(255,255,255,0.25), inset 0 0 12px rgba(255,255,255,0.06);
+}
+
+.corner-handle:active::after {
+    content: '+';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 18px;
+    color: rgba(255,255,255,0.7);
+    font-weight: 200;
+    font-family: var(--font);
+    line-height: 1;
+    pointer-events: none;
 }
 
 #adjust-hint {
