@@ -1156,7 +1156,7 @@ function initCornerDrag() {
     const magnifier = document.createElement('div');
     magnifier.id = 'corner-magnifier';
     magnifier.innerHTML = '<div class="magnifier-ring"><canvas id="magnifier-canvas" width="60" height="60"></canvas></div>';
-    document.getElementById('adjust-container').appendChild(magnifier);
+    document.getElementById('adjust-overlay').appendChild(magnifier);
     const magCanvas = document.getElementById('magnifier-canvas');
     const magCtx = magCanvas.getContext('2d');
 
@@ -1227,8 +1227,8 @@ function initCornerDrag() {
         };
 
         function positionMagnifier(cx, cy) {
-            const container = document.getElementById('adjust-container');
-            const rect = container.getBoundingClientRect();
+            const wrap = $('#adjust-image-wrap');
+            const rect = wrap.getBoundingClientRect();
             magnifier.style.left = (cx - rect.left) + 'px';
             magnifier.style.top = (cy - rect.top) + 'px';
         }
