@@ -1152,118 +1152,143 @@ function updateCornerHandles() {
 function initCornerDrag() {
     const handleIds = ['corner-tl', 'corner-tr', 'corner-br', 'corner-bl'];
 
+function initCornerDrag() {
+    const handleIds = ['corner-tl', 'corner-tr', 'corner-br', 'corner-bl'];
+    const overlay = document.getElementById('adjust-overlay');
+
     // Create magnifier element with canvas for zoomed content
     const magnifier = document.createElement('div');
     magnifier.id = 'corner-magnifier';
     magnifier.innerHTML = '<div class="magnifier-ring"><canvas id="magnifier-canvas" width="60" height="60"></canvas></div>';
-    document.getElementById('adjust-overlay').appendChild(magnifier);
+    overlay.appendChild(magnifier);
     const magCanvas = document.getElementById('magnifier-canvas');
     const magCtx = magCanvas.getContext('2d');
 
     function updateMagnifier() {
-        const idx = adjustState.dragging;
+        var idx = adjustState.dragging;
         if (idx < 0) return;
-        const srcCanvas = adjustState.sourceCanvas;
+        var srcCanvas = adjustState.sourceCanvas;
         if (!srcCanvas) return;
-
-        const normX = adjustState.corners[idx * 2];
-        const normY = adjustState.corners[idx * 2 + 1];
-        const cx = normX * adjustState.imgW;
-        const cy = normY * adjustState.imgH;
-        const halfR = 10; // 20px region → 60px at 3x zoom
-
+        var normX = adjustState.corners[idx * 2];
+        var normY = adjustState.corners[idx * 2 + 1];
+        var cx = normX * adjustState.imgW;
+        var cy = normY * adjustState.imgH;
         magCtx.save();
-        // Circular clip
         magCtx.beginPath();
         magCtx.arc(30, 30, 29, 0, Math.PI * 2);
         magCtx.clip();
-        // Draw zoomed region
-        magCtx.drawImage(srcCanvas, cx - halfR, cy - halfR, 20, 20, 0, 0, 60, 60);
+        magCtx.drawImage(srcCanvas, cx - 10, cy - 10, 20, 20, 0, 0, 60, 60);
         magCtx.restore();
     }
 
-    for (let i = 0; i < 4; i++) {
-        const el = $(`#${handleIds[i]}`);
-
-        const startDrag = (clientX, clientY) => {
-            adjustState.dragging = i;
-            el.classList.add('is-dragging');
-            el.style.opacity = '0';   // hide the original dot
-            magnifier.classList.add('active');
-            positionMagnifier(clientX, clientY);
-            updateMagnifier();
-        };
-
-        const moveDrag = (clientX, clientY) => {
-            if (adjustState.dragging < 0) return;
-
-            const wrap = $('#adjust-image-wrap');
-            const wrapRect = wrap.getBoundingClientRect();
-
-            // Move magnifier to follow touch
-            positionMagnifier(clientX, clientY);
-
-            // Calculate position relative to the image wrap
-            const relX = clientX - wrapRect.left;
-            const relY = clientY - wrapRect.top;
-
-            // Normalize to [0.05, 0.95] to keep handles visible within image bounds
-            const margin = 0.05;
-            const normX = Math.max(margin, Math.min(1 - margin, relX / adjustState.displayW));
-            const normY = Math.max(margin, Math.min(1 - margin, relY / adjustState.displayH));
-
-            adjustState.corners[adjustState.dragging * 2] = normX;
-            adjustState.corners[adjustState.dragging * 2 + 1] = normY;
-
-            updateAdjustOverlay();
-            updateMagnifier();
-        };
-
-        const endDrag = () => {
-            el.classList.remove('is-dragging');
-            el.style.opacity = '1';   // show the original dot again
-            magnifier.classList.remove('active');
-            adjustState.dragging = -1;
-        };
-
-        function positionMagnifier(cx, cy) {
-            const wrap = $('#adjust-image-wrap');
-            const rect = wrap.getBoundingClientRect();
-            magnifier.style.left = (cx - rect.left) + 'px';
-            magnifier.style.top = (cy - rect.top) + 'px';
-        }
-
-        // Touch events
-        el.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            const t = e.touches[0];
-            startDrag(t.clientX, t.clientY);
-        }, { passive: false });
-
-        el.addEventListener('touchmove', (e) => {
-            e.preventDefault();
-            const t = e.touches[0];
-            moveDrag(t.clientX, t.clientY);
-        }, { passive: false });
-
-        el.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            endDrag();
-        }, { passive: false });
-
-        // Mouse events (for desktop testing)
-        el.addEventListener('mousedown', (e) => {
-            startDrag(e.clientX, e.clientY);
-        });
-
-        document.addEventListener('mousemove', (e) => {
-            moveDrag(e.clientX, e.clientY);
-        });
-
-        document.addEventListener('mouseup', () => {
-            endDrag();
-        });
+    function positionMagnifier() {
+        var idx = adjustState.dragging;
+        if (idx < 0) return;
+        magnifier.style.left = (adjustState.corners[idx * 2] * adjustState.displayW) + 'px';
+        magnifier.style.top = (adjustState.corners[idx * 2 + 1] * adjustState.displayH) + 'px';
     }
+
+    // Calculate a corner's screen position for distance testing
+    function getCornerScreen(index) {
+        var wrap = $('#adjust-image-wrap');
+        var r = wrap.getBoundingClientRect();
+        return {
+            x: r.left + adjustState.corners[index * 2] * adjustState.displayW,
+            y: r.top + adjustState.corners[index * 2 + 1] * adjustState.displayH
+        };
+    }
+
+    // Find which corner is nearest to the touch point (within 80px threshold)
+    function findNearest(cx, cy) {
+        var best = -1;
+        var bestDist = 80;
+        for (var i = 0; i < 4; i++) {
+            var p = getCornerScreen(i);
+            var d = Math.sqrt((cx - p.x) * (cx - p.x) + (cy - p.y) * (cy - p.y));
+            if (d < bestDist) { bestDist = d; best = i; }
+        }
+        return best;
+    }
+
+    function startDrag(index) {
+        adjustState.dragging = index;
+        var el = $('#' + handleIds[index]);
+        if (el) { el.classList.add('is-dragging'); el.style.opacity = '0'; }
+        magnifier.classList.add('active');
+        positionMagnifier();
+        updateMagnifier();
+        // Prevent text selection during drag
+        document.body.style.userSelect = 'none';
+        document.body.style.webkitUserSelect = 'none';
+    }
+
+    function moveDrag(clientX, clientY) {
+        if (adjustState.dragging < 0) return;
+        var wrap = $('#adjust-image-wrap');
+        var r = wrap.getBoundingClientRect();
+        var relX = clientX - r.left;
+        var relY = clientY - r.top;
+        var margin = 0.05;
+        var normX = Math.max(margin, Math.min(1 - margin, relX / adjustState.displayW));
+        var normY = Math.max(margin, Math.min(1 - margin, relY / adjustState.displayH));
+        adjustState.corners[adjustState.dragging * 2] = normX;
+        adjustState.corners[adjustState.dragging * 2 + 1] = normY;
+        updateAdjustOverlay();
+        positionMagnifier();
+        updateMagnifier();
+    }
+
+    function endDrag() {
+        if (adjustState.dragging >= 0) {
+            var el = $('#' + handleIds[adjustState.dragging]);
+            if (el) { el.classList.remove('is-dragging'); el.style.opacity = '1'; }
+        }
+        magnifier.classList.remove('active');
+        adjustState.dragging = -1;
+        document.body.style.userSelect = '';
+        document.body.style.webkitUserSelect = '';
+    }
+
+    // === Touch handling on overlay (distance-based) ===
+    overlay.addEventListener('touchstart', function (e) {
+        var t = e.touches[0];
+        var idx = findNearest(t.clientX, t.clientY);
+        if (idx >= 0) {
+            e.preventDefault();
+            startDrag(idx);
+        }
+    }, { passive: false });
+
+    overlay.addEventListener('touchmove', function (e) {
+        if (adjustState.dragging < 0) return;
+        e.preventDefault();
+        var t = e.touches[0];
+        moveDrag(t.clientX, t.clientY);
+    }, { passive: false });
+
+    overlay.addEventListener('touchend', function (e) {
+        if (adjustState.dragging < 0) return;
+        e.preventDefault();
+        endDrag();
+    }, { passive: false });
+
+    overlay.addEventListener('touchcancel', function () {
+        if (adjustState.dragging >= 0) endDrag();
+    });
+
+    // === Mouse handling ===
+    overlay.addEventListener('mousedown', function (e) {
+        var idx = findNearest(e.clientX, e.clientY);
+        if (idx >= 0) { startDrag(idx); }
+    });
+
+    document.addEventListener('mousemove', function (e) {
+        moveDrag(e.clientX, e.clientY);
+    });
+
+    document.addEventListener('mouseup', function () {
+        endDrag();
+    });
 }
 
 // ============================
