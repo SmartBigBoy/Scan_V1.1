@@ -1044,6 +1044,7 @@ let adjustState = {
     offsetY: 0,
     imageData: null,
     sourceCanvas: null,
+    displayCanvas: null,
 };
 
 function showAdjustScreen(dataUrl) {
@@ -1110,7 +1111,7 @@ function showAdjustScreen(dataUrl) {
             ];
         }
 
-        // Store the full image data for later cropping and magnifier
+        // Store the full image data for later cropping
         const fullCanvas = document.createElement('canvas');
         fullCanvas.width = adjustState.imgW;
         fullCanvas.height = adjustState.imgH;
@@ -1118,6 +1119,16 @@ function showAdjustScreen(dataUrl) {
         fctx.drawImage(img, 0, 0);
         adjustState.imageData = fctx.getImageData(0, 0, adjustState.imgW, adjustState.imgH);
         adjustState.sourceCanvas = fullCanvas;
+
+        // Display-sized canvas for magnifier (matches screen coordinates exactly)
+        const dispCanvas = document.createElement('canvas');
+        dispCanvas.width = Math.round(adjustState.displayW);
+        dispCanvas.height = Math.round(adjustState.displayH);
+        const dctx = dispCanvas.getContext('2d');
+        dctx.drawImage(img, 0, 0, dispCanvas.width, dispCanvas.height);
+        adjustState.displayCanvas = dispCanvas;
+        // If magnifier is active, redraw it with the new display canvas
+        if (adjustState.dragging >= 0) updateMagnifier();
 
         updateAdjustOverlay();
         updateCornerHandles();
@@ -1151,9 +1162,6 @@ function updateCornerHandles() {
 
 function initCornerDrag() {
     const handleIds = ['corner-tl', 'corner-tr', 'corner-br', 'corner-bl'];
-
-function initCornerDrag() {
-    const handleIds = ['corner-tl', 'corner-tr', 'corner-br', 'corner-bl'];
     const overlay = document.getElementById('adjust-overlay');
 
     // Create magnifier element with canvas for zoomed content
@@ -1167,17 +1175,23 @@ function initCornerDrag() {
     function updateMagnifier() {
         var idx = adjustState.dragging;
         if (idx < 0) return;
-        var srcCanvas = adjustState.sourceCanvas;
-        if (!srcCanvas) return;
+        var dispCanvas = adjustState.displayCanvas;
+        if (!dispCanvas) return;
         var normX = adjustState.corners[idx * 2];
         var normY = adjustState.corners[idx * 2 + 1];
-        var cx = normX * adjustState.imgW;
-        var cy = normY * adjustState.imgH;
+        // Use display canvas coordinates (matches magnifier position exactly)
+        var cx = normX * dispCanvas.width;
+        var cy = normY * dispCanvas.height;
+        var srcSize = 20;
+        var half = srcSize / 2;
+        var sx = Math.round(Math.max(0, Math.min(dispCanvas.width - srcSize, cx - half)));
+        var sy = Math.round(Math.max(0, Math.min(dispCanvas.height - srcSize, cy - half)));
+        magCtx.clearRect(0, 0, 60, 60);
         magCtx.save();
         magCtx.beginPath();
         magCtx.arc(30, 30, 29, 0, Math.PI * 2);
         magCtx.clip();
-        magCtx.drawImage(srcCanvas, cx - 10, cy - 10, 20, 20, 0, 0, 60, 60);
+        magCtx.drawImage(dispCanvas, sx, sy, srcSize, srcSize, 0, 0, 60, 60);
         magCtx.restore();
     }
 
@@ -1201,7 +1215,7 @@ function initCornerDrag() {
     // Find which corner is nearest to the touch point (within 80px threshold)
     function findNearest(cx, cy) {
         var best = -1;
-        var bestDist = 80;
+        var bestDist = 300;
         for (var i = 0; i < 4; i++) {
             var p = getCornerScreen(i);
             var d = Math.sqrt((cx - p.x) * (cx - p.x) + (cy - p.y) * (cy - p.y));
@@ -1210,8 +1224,16 @@ function initCornerDrag() {
         return best;
     }
 
-    function startDrag(index) {
+    // Track drag origin for relative (delta-based) movement
+    var dragOriginX = 0, dragOriginY = 0;
+    var dragCornerOriginX = 0, dragCornerOriginY = 0;
+
+    function startDrag(index, clientX, clientY) {
         adjustState.dragging = index;
+        dragOriginX = clientX;
+        dragOriginY = clientY;
+        dragCornerOriginX = adjustState.corners[index * 2];
+        dragCornerOriginY = adjustState.corners[index * 2 + 1];
         var el = $('#' + handleIds[index]);
         if (el) { el.classList.add('is-dragging'); el.style.opacity = '0'; }
         magnifier.classList.add('active');
@@ -1224,13 +1246,11 @@ function initCornerDrag() {
 
     function moveDrag(clientX, clientY) {
         if (adjustState.dragging < 0) return;
-        var wrap = $('#adjust-image-wrap');
-        var r = wrap.getBoundingClientRect();
-        var relX = clientX - r.left;
-        var relY = clientY - r.top;
+        var dx = (clientX - dragOriginX) / adjustState.displayW;
+        var dy = (clientY - dragOriginY) / adjustState.displayH;
         var margin = 0.05;
-        var normX = Math.max(margin, Math.min(1 - margin, relX / adjustState.displayW));
-        var normY = Math.max(margin, Math.min(1 - margin, relY / adjustState.displayH));
+        var normX = Math.max(margin, Math.min(1 - margin, dragCornerOriginX + dx));
+        var normY = Math.max(margin, Math.min(1 - margin, dragCornerOriginY + dy));
         adjustState.corners[adjustState.dragging * 2] = normX;
         adjustState.corners[adjustState.dragging * 2 + 1] = normY;
         updateAdjustOverlay();
@@ -1255,7 +1275,7 @@ function initCornerDrag() {
         var idx = findNearest(t.clientX, t.clientY);
         if (idx >= 0) {
             e.preventDefault();
-            startDrag(idx);
+            startDrag(idx, t.clientX, t.clientY);
         }
     }, { passive: false });
 
@@ -1279,7 +1299,7 @@ function initCornerDrag() {
     // === Mouse handling ===
     overlay.addEventListener('mousedown', function (e) {
         var idx = findNearest(e.clientX, e.clientY);
-        if (idx >= 0) { startDrag(idx); }
+        if (idx >= 0) { startDrag(idx, e.clientX, e.clientY); }
     });
 
     document.addEventListener('mousemove', function (e) {
