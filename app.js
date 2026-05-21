@@ -1155,6 +1155,12 @@ function updateCornerHandles() {
 function initCornerDrag() {
     const handleIds = ['corner-tl', 'corner-tr', 'corner-br', 'corner-bl'];
 
+    // Create magnifier element
+    const magnifier = document.createElement('div');
+    magnifier.id = 'corner-magnifier';
+    magnifier.innerHTML = '<div class="magnifier-ring"><div class="magnifier-crosshair"></div></div>';
+    document.getElementById('adjust-container').appendChild(magnifier);
+
     for (let i = 0; i < 4; i++) {
         const el = $(`#${handleIds[i]}`);
 
@@ -1162,6 +1168,9 @@ function initCornerDrag() {
             adjustState.dragging = i;
             el.classList.add('is-dragging');
             el.style.cursor = 'grabbing';
+            // Show magnifier
+            magnifier.classList.add('active');
+            positionMagnifier(clientX, clientY);
         };
 
         const moveDrag = (clientX, clientY) => {
@@ -1169,6 +1178,9 @@ function initCornerDrag() {
 
             const wrap = $('#adjust-image-wrap');
             const wrapRect = wrap.getBoundingClientRect();
+
+            // Position magnifier at touch point
+            positionMagnifier(clientX, clientY);
 
             // Calculate position relative to the image wrap
             const relX = clientX - wrapRect.left;
@@ -1186,8 +1198,16 @@ function initCornerDrag() {
 
         const endDrag = () => {
             el.classList.remove('is-dragging');
+            magnifier.classList.remove('active');
             adjustState.dragging = -1;
         };
+
+        function positionMagnifier(cx, cy) {
+            const container = document.getElementById('adjust-container');
+            const rect = container.getBoundingClientRect();
+            magnifier.style.left = (cx - rect.left) + 'px';
+            magnifier.style.top = (cy - rect.top - 60) + 'px';
+        }
 
         // Touch events
         el.addEventListener('touchstart', (e) => {
