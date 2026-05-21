@@ -1043,6 +1043,7 @@ let adjustState = {
     offsetX: 0,
     offsetY: 0,
     imageData: null,
+    sourceCanvas: null,
 };
 
 function showAdjustScreen(dataUrl) {
@@ -1109,18 +1110,14 @@ function showAdjustScreen(dataUrl) {
             ];
         }
 
-        // Store the full image data for later cropping
+        // Store the full image data for later cropping and magnifier
         const fullCanvas = document.createElement('canvas');
         fullCanvas.width = adjustState.imgW;
         fullCanvas.height = adjustState.imgH;
         const fctx = fullCanvas.getContext('2d');
         fctx.drawImage(img, 0, 0);
         adjustState.imageData = fctx.getImageData(0, 0, adjustState.imgW, adjustState.imgH);
-
-        // Make sure img is not cross-origin
-        if (dataUrl.startsWith('blob:')) {
-            // Already same-origin since we created it
-        }
+        adjustState.sourceCanvas = fullCanvas;
 
         updateAdjustOverlay();
         updateCornerHandles();
@@ -1155,11 +1152,35 @@ function updateCornerHandles() {
 function initCornerDrag() {
     const handleIds = ['corner-tl', 'corner-tr', 'corner-br', 'corner-bl'];
 
-    // Create magnifier element (replaces the corner dot at its position)
+    // Create magnifier element with canvas for zoomed content
     const magnifier = document.createElement('div');
     magnifier.id = 'corner-magnifier';
-    magnifier.innerHTML = '<div class="magnifier-ring"></div>';
+    magnifier.innerHTML = '<div class="magnifier-ring"><canvas id="magnifier-canvas" width="60" height="60"></canvas></div>';
     document.getElementById('adjust-container').appendChild(magnifier);
+    const magCanvas = document.getElementById('magnifier-canvas');
+    const magCtx = magCanvas.getContext('2d');
+
+    function updateMagnifier() {
+        const idx = adjustState.dragging;
+        if (idx < 0) return;
+        const srcCanvas = adjustState.sourceCanvas;
+        if (!srcCanvas) return;
+
+        const normX = adjustState.corners[idx * 2];
+        const normY = adjustState.corners[idx * 2 + 1];
+        const cx = normX * adjustState.imgW;
+        const cy = normY * adjustState.imgH;
+        const halfR = 10; // 20px region → 60px at 3x zoom
+
+        magCtx.save();
+        // Circular clip
+        magCtx.beginPath();
+        magCtx.arc(30, 30, 29, 0, Math.PI * 2);
+        magCtx.clip();
+        // Draw zoomed region
+        magCtx.drawImage(srcCanvas, cx - halfR, cy - halfR, 20, 20, 0, 0, 60, 60);
+        magCtx.restore();
+    }
 
     for (let i = 0; i < 4; i++) {
         const el = $(`#${handleIds[i]}`);
@@ -1170,6 +1191,7 @@ function initCornerDrag() {
             el.style.opacity = '0';   // hide the original dot
             magnifier.classList.add('active');
             positionMagnifier(clientX, clientY);
+            updateMagnifier();
         };
 
         const moveDrag = (clientX, clientY) => {
@@ -1194,6 +1216,7 @@ function initCornerDrag() {
             adjustState.corners[adjustState.dragging * 2 + 1] = normY;
 
             updateAdjustOverlay();
+            updateMagnifier();
         };
 
         const endDrag = () => {
