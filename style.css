@@ -551,15 +551,14 @@ html, body {
 }
 
 /* ============================
-   Corner Magnifier
+   Corner Magnifier (replaces the dot at 3x scale)
    ============================ */
 #corner-magnifier {
     position: absolute;
     z-index: 10;
     pointer-events: none;
     display: none;
-    transform: translate(-50%, -100%);
-    padding-bottom: 8px;
+    transform: translate(-50%, -50%);
 }
 
 #corner-magnifier.active {
@@ -570,47 +569,32 @@ html, body {
     width: 60px;
     height: 60px;
     border-radius: 50%;
-    background: rgba(255,255,255,0.1);
-    border: 2px solid rgba(255,255,255,0.85);
-    box-shadow: 0 0 24px rgba(255,255,255,0.3), inset 0 0 16px rgba(255,255,255,0.08);
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-#corner-magnifier .magnifier-crosshair {
-    width: 20px;
-    height: 20px;
+    background: transparent;
+    border: 1.5px solid rgba(255,255,255,0.9);
+    box-shadow: 0 0 20px rgba(255,255,255,0.2), inset 0 0 12px rgba(255,255,255,0.04);
     position: relative;
 }
 
-#corner-magnifier .magnifier-crosshair::before,
-#corner-magnifier .magnifier-crosshair::after {
+/* Crosshair */
+#corner-magnifier .magnifier-ring::before,
+#corner-magnifier .magnifier-ring::after {
     content: '';
     position: absolute;
-    background: rgba(255,255,255,0.7);
+    background: rgba(255,255,255,0.5);
 }
 
-#corner-magnifier .magnifier-crosshair::before {
-    width: 1.5px;
+#corner-magnifier .magnifier-ring::before {
+    width: 1px;
     height: 100%;
     top: 0;
     left: 50%;
-    transform: translateX(-50%);
 }
 
-#corner-magnifier .magnifier-crosshair::after {
-    height: 1.5px;
+#corner-magnifier .magnifier-ring::after {
+    height: 1px;
     width: 100%;
     left: 0;
     top: 50%;
-    transform: translateY(-50%);
-}
-
-/* Magnifying glass effect on drag (keep for backward compat) */
-.corner-handle.is-dragging::before {
-    border-color: rgba(255,255,255,0.6);
 }
 
 #adjust-hint {

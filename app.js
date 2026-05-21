@@ -1155,10 +1155,10 @@ function updateCornerHandles() {
 function initCornerDrag() {
     const handleIds = ['corner-tl', 'corner-tr', 'corner-br', 'corner-bl'];
 
-    // Create magnifier element
+    // Create magnifier element (replaces the corner dot at its position)
     const magnifier = document.createElement('div');
     magnifier.id = 'corner-magnifier';
-    magnifier.innerHTML = '<div class="magnifier-ring"><div class="magnifier-crosshair"></div></div>';
+    magnifier.innerHTML = '<div class="magnifier-ring"></div>';
     document.getElementById('adjust-container').appendChild(magnifier);
 
     for (let i = 0; i < 4; i++) {
@@ -1167,8 +1167,7 @@ function initCornerDrag() {
         const startDrag = (clientX, clientY) => {
             adjustState.dragging = i;
             el.classList.add('is-dragging');
-            el.style.cursor = 'grabbing';
-            // Show magnifier
+            el.style.opacity = '0';   // hide the original dot
             magnifier.classList.add('active');
             positionMagnifier(clientX, clientY);
         };
@@ -1179,7 +1178,7 @@ function initCornerDrag() {
             const wrap = $('#adjust-image-wrap');
             const wrapRect = wrap.getBoundingClientRect();
 
-            // Position magnifier at touch point
+            // Move magnifier to follow touch
             positionMagnifier(clientX, clientY);
 
             // Calculate position relative to the image wrap
@@ -1198,6 +1197,7 @@ function initCornerDrag() {
 
         const endDrag = () => {
             el.classList.remove('is-dragging');
+            el.style.opacity = '1';   // show the original dot again
             magnifier.classList.remove('active');
             adjustState.dragging = -1;
         };
@@ -1206,7 +1206,7 @@ function initCornerDrag() {
             const container = document.getElementById('adjust-container');
             const rect = container.getBoundingClientRect();
             magnifier.style.left = (cx - rect.left) + 'px';
-            magnifier.style.top = (cy - rect.top - 60) + 'px';
+            magnifier.style.top = (cy - rect.top) + 'px';
         }
 
         // Touch events
