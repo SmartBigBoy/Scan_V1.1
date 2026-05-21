@@ -1160,6 +1160,7 @@ function initCornerDrag() {
 
         const startDrag = (clientX, clientY) => {
             adjustState.dragging = i;
+            el.classList.add('is-dragging');
             el.style.cursor = 'grabbing';
         };
 
@@ -1184,6 +1185,7 @@ function initCornerDrag() {
         };
 
         const endDrag = () => {
+            el.classList.remove('is-dragging');
             adjustState.dragging = -1;
         };
 

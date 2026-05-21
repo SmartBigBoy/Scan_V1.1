@@ -550,15 +550,19 @@ html, body {
     cursor: grabbing;
 }
 
-/* Magnifying glass effect on press */
-.corner-handle:active::before {
+.corner-handle.is-dragging {
+    cursor: grabbing;
+}
+
+/* Magnifying glass effect on drag */
+.corner-handle.is-dragging::before {
     transform: translate(-50%, -50%) scale(3);
     background: rgba(255,255,255,0.06);
     border: 1.5px solid rgba(255,255,255,0.9);
     box-shadow: 0 0 24px rgba(255,255,255,0.25), inset 0 0 12px rgba(255,255,255,0.06);
 }
 
-.corner-handle:active::after {
+.corner-handle.is-dragging::after {
     content: '+';
     position: absolute;
     top: 50%;
