@@ -1185,9 +1185,10 @@ function initCornerDrag() {
             const relX = clientX - wrapRect.left;
             const relY = clientY - wrapRect.top;
 
-            // Normalize to [0, 1] within the image
-            const normX = Math.max(0, Math.min(1, relX / adjustState.displayW));
-            const normY = Math.max(0, Math.min(1, relY / adjustState.displayH));
+            // Normalize to [0.05, 0.95] to keep handles visible within image bounds
+            const margin = 0.05;
+            const normX = Math.max(margin, Math.min(1 - margin, relX / adjustState.displayW));
+            const normY = Math.max(margin, Math.min(1 - margin, relY / adjustState.displayH));
 
             adjustState.corners[adjustState.dragging * 2] = normX;
             adjustState.corners[adjustState.dragging * 2 + 1] = normY;
