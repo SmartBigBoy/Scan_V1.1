@@ -991,6 +991,8 @@ async function performCapture() {
                 console.log(`Capture: ImageCapture API — ${photoW}×${photoH}`);
             } catch (photoErr) {
                 console.warn('ImageCapture fallback to video frame:', photoErr.message);
+                // Show error in badge so user can diagnose without devtools
+                state.captureInfo = { mode: 'ImageCapture ✗ ' + photoErr.message, width: 0, height: 0 };
                 // Fall through to video frame capture below
                 dataUrl = null;
             }
@@ -1001,7 +1003,12 @@ async function performCapture() {
             const vw = video.videoWidth;
             const vh = video.videoHeight;
             console.log(`Capture: Video frame — ${vw}×${vh}`);
-            state.captureInfo = { mode: 'VideoFrame', width: vw, height: vh };
+            // If ImageCapture failed, append fallback info to the error message
+            if (state.captureInfo.mode && state.captureInfo.mode.startsWith('ImageCapture ✗')) {
+                state.captureInfo.mode += ` → VideoFrame ${vw}×${vh}`;
+            } else {
+                state.captureInfo = { mode: 'VideoFrame', width: vw, height: vh };
+            }
             const canvas = document.createElement('canvas');
             canvas.width = vw;
             canvas.height = vh;
@@ -1918,7 +1925,11 @@ function updateCaptureBadge() {
     if (!badge) return;
     const info = state.captureInfo;
     if (info && info.mode) {
-        badge.textContent = `${info.mode} · ${info.width}×${info.height}`;
+        if (info.width) {
+            badge.textContent = `${info.mode} · ${info.width}×${info.height}`;
+        } else {
+            badge.textContent = info.mode;
+        }
         badge.classList.add('visible');
     } else {
         badge.classList.remove('visible');
