@@ -21,6 +21,7 @@ const state = {
     adjustCorners: null,         // detected corners in original image coordinates
     isMobile: /iPhone|iPad|iPod|Android/i.test(navigator.userAgent),
     autoCapture: true,           // auto-capture when document is stable
+    captureInfo: { mode: '', width: 0, height: 0 },  // last capture mode & resolution
 };
 
 // ===== DOM References =====
@@ -87,11 +88,13 @@ async function initCamera(cameraIdx) {
         if (cameraIdx !== undefined && state.cameras[cameraIdx]) {
             videoConstraints.deviceId = { exact: state.cameras[cameraIdx].deviceId };
             state.activeCameraIdx = cameraIdx;
+        } else if (state.facingMode) {
+            // Prefer facingMode over pre-enumerated camera list to ensure
+            // rear camera ('environment') is used by default on mobile
+            videoConstraints.facingMode = state.facingMode;
         } else if (state.cameras.length > 0 && state.cameras[state.activeCameraIdx]) {
             // Use the currently selected camera if available
             videoConstraints.deviceId = { exact: state.cameras[state.activeCameraIdx].deviceId };
-        } else if (state.facingMode) {
-            videoConstraints.facingMode = state.facingMode;
         }
 
         let stream;
@@ -128,6 +131,7 @@ async function initCamera(cameraIdx) {
         return new Promise((resolve) => {
             video.onloadedmetadata = () => {
                 video.play();
+                updateStreamInfoBadge();
 
                 // Apply continuous autofocus if supported
                 const track = stream.getVideoTracks()[0];
@@ -166,6 +170,11 @@ function stopCamera() {
     }
     video.srcObject = null;
     updateCameraBtn();
+    // If we have prior capture info, keep showing it; otherwise clear badge
+    if (!state.captureInfo.mode) {
+        const badge = $('#capture-badge');
+        if (badge) badge.classList.remove('visible');
+    }
 }
 
 function toggleFlash() {
@@ -978,6 +987,7 @@ async function performCapture() {
                 photoW = blob.width || (await blobToImg(blob)).naturalWidth;
                 photoH = blob.height || (await blobToImg(blob)).naturalHeight;
                 dataUrl = await blobToDataURL(blob);
+                state.captureInfo = { mode: 'ImageCapture', width: photoW, height: photoH };
                 console.log(`Capture: ImageCapture API — ${photoW}×${photoH}`);
             } catch (photoErr) {
                 console.warn('ImageCapture fallback to video frame:', photoErr.message);
@@ -991,6 +1001,7 @@ async function performCapture() {
             const vw = video.videoWidth;
             const vh = video.videoHeight;
             console.log(`Capture: Video frame — ${vw}×${vh}`);
+            state.captureInfo = { mode: 'VideoFrame', width: vw, height: vh };
             const canvas = document.createElement('canvas');
             canvas.width = vw;
             canvas.height = vh;
@@ -1006,6 +1017,9 @@ async function performCapture() {
             photoW = vw;
             photoH = vh;
         }
+
+        // Update capture info badge
+        updateCaptureBadge();
 
         // Save detected corners, scaled to match the actual captured resolution
         if (state.detectedCorners) {
@@ -1284,8 +1298,10 @@ function updateCornerHandles() {
 
     for (let i = 0; i < 4; i++) {
         const el = $(`#${handleIds[i]}`);
-        const x = corners[i * 2] * adjustState.displayW;
-        const y = corners[i * 2 + 1] * adjustState.displayH;
+        // Round to full pixels so corner handles, SVG polygon,
+        // and magnifier all align on the same pixel grid
+        const x = Math.round(corners[i * 2] * adjustState.displayW);
+        const y = Math.round(corners[i * 2 + 1] * adjustState.displayH);
         el.style.left = x + 'px';
         el.style.top = y + 'px';
     }
@@ -1334,8 +1350,8 @@ function initCornerDrag() {
     function positionMagnifier() {
         var idx = adjustState.dragging;
         if (idx < 0) return;
-        magnifier.style.left = (adjustState.corners[idx * 2] * adjustState.displayW) + 'px';
-        magnifier.style.top = (adjustState.corners[idx * 2 + 1] * adjustState.displayH) + 'px';
+        magnifier.style.left = Math.round(adjustState.corners[idx * 2] * adjustState.displayW) + 'px';
+        magnifier.style.top = Math.round(adjustState.corners[idx * 2 + 1] * adjustState.displayH) + 'px';
     }
 
     // Calculate a corner's screen position for distance testing
@@ -1893,6 +1909,34 @@ $('#btn-adjust-done').addEventListener('click', () => {
 });
 
 // Preview screen
+// ============================
+//  Capture Mode Badge
+// ============================
+
+function updateCaptureBadge() {
+    const badge = $('#capture-badge');
+    if (!badge) return;
+    const info = state.captureInfo;
+    if (info && info.mode) {
+        badge.textContent = `${info.mode} · ${info.width}×${info.height}`;
+        badge.classList.add('visible');
+    } else {
+        badge.classList.remove('visible');
+    }
+}
+
+// Also show stream resolution while camera is running (pre-capture)
+function updateStreamInfoBadge() {
+    const badge = $('#capture-badge');
+    if (!badge) return;
+    if (state.stream && video.videoWidth) {
+        badge.textContent = `VideoStream · ${video.videoWidth}×${video.videoHeight}`;
+        badge.classList.add('visible');
+    } else if (!state.captureInfo.mode) {
+        badge.classList.remove('visible');
+    }
+}
+
 // ============================
 //  PWA Install Banner
 // ============================
