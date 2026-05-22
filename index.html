@@ -54,9 +54,7 @@
                 <button id="btn-start-camera">允许访问相机</button>
             </div>
 
-            <!-- Capture mode badge (auto-populated after first scan) -->
-            <div id="capture-badge"></div>
-        </div>
+	        </div>
 
         <!-- Bottom toolbar -->
         <div id="scanner-toolbar">
@@ -175,6 +173,9 @@
 
     <!-- Hidden file input for gallery -->
     <input type="file" id="file-input" accept="image/*" multiple>
+
+    <!-- Capture mode badge (visible on all screens) -->
+    <div id="capture-badge"></div>
 
     <script src="https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
     <script src="app.js"></script>
