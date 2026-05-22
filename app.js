@@ -246,6 +246,44 @@ function boxBlur(gray, w, h, radius) {
     return result;
 }
 
+// Fast separable box blur — O(n) regardless of radius (two-pass 1D sliding window)
+function boxBlurFast(gray, w, h, radius) {
+    const temp = new Float32Array(w * h);
+    const out = new Float32Array(w * h);
+    const size = 2 * radius + 1;
+
+    // Horizontal pass
+    for (let y = 0; y < h; y++) {
+        const row = y * w;
+        // Initial window sum at x = -radius (clamped to 0)
+        let sum = 0;
+        for (let k = -radius; k <= radius; k++) {
+            sum += gray[row + Math.max(0, Math.min(w - 1, k))];
+        }
+        temp[row] = sum / size;
+        for (let x = 1; x < w; x++) {
+            sum -= gray[row + Math.max(0, x - radius - 1)];
+            sum += gray[row + Math.min(w - 1, x + radius)];
+            temp[row + x] = sum / size;
+        }
+    }
+
+    // Vertical pass
+    for (let x = 0; x < w; x++) {
+        let sum = 0;
+        for (let k = -radius; k <= radius; k++) {
+            sum += temp[Math.max(0, Math.min(h - 1, k)) * w + x];
+        }
+        out[x] = sum / size;
+        for (let y = 1; y < h; y++) {
+            sum -= temp[Math.max(0, y - radius - 1) * w + x];
+            sum += temp[Math.min(h - 1, y + radius) * w + x];
+            out[y * w + x] = sum / size;
+        }
+    }
+    return out;
+}
+
 function percentileThreshold(data, pct = 0.85) {
     const sorted = new Float32Array(data);
     sorted.sort();
@@ -1404,15 +1442,26 @@ function applyFilterToImage(imageData, filter) {
         case 'bw': {
             const w = imageData.width;
             const h = imageData.height;
+            const len = w * h;
             // 1. Grayscale
-            const gray = new Float32Array(w * h);
-            for (let i = 0; i < w * h; i++) {
+            const gray = new Float32Array(len);
+            for (let i = 0; i < len; i++) {
                 const idx = i * 4;
                 gray[i] = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
             }
-            // 2. Light blur to suppress noise
+            // 2. Light blur to suppress sensor noise
             const blurred = boxBlur(gray, w, h, 1);
-            // 3. Integral image for O(1) local-mean queries
+            // 3. Background estimation via very large blur — captures
+            //    low-frequency shading from paper wrinkles / uneven light
+            const bgRadius = Math.max(16, Math.floor(Math.min(w, h) / 6));
+            const background = boxBlurFast(blurred, w, h, bgRadius);
+            // 4. Background subtraction: corrected = blurred - background + 128
+            //    This flattens the shading so wrinkles don't trigger the threshold.
+            const corrected = new Float32Array(len);
+            for (let i = 0; i < len; i++) {
+                corrected[i] = Math.max(0, Math.min(255, blurred[i] - background[i] + 128));
+            }
+            // 5. Integral image for O(1) local-mean queries
             const iw = w + 1, ih = h + 1;
             const integral = new Float32Array(iw * ih);
             for (let y = 0; y < h; y++) {
@@ -1421,14 +1470,14 @@ function applyFilterToImage(imageData, filter) {
                 const intOffPrev = y * iw;
                 let rowSum = 0;
                 for (let x = 0; x < w; x++) {
-                    rowSum += blurred[rowOff + x];
+                    rowSum += corrected[rowOff + x];
                     integral[intOff + (x + 1)] = integral[intOffPrev + (x + 1)] + rowSum;
                 }
             }
-            // 4. Adaptive threshold — larger block, tighter offset
+            // 6. Adaptive threshold
             const blockSize = Math.max(32, Math.floor(Math.min(w, h) / 4));
             const half = blockSize >> 1;
-            const offset = 8;
+            const offset = 14;  // slightly higher offset after background flattening
             for (let y = 0; y < h; y++) {
                 const y1 = Math.max(0, y - half);
                 const y2 = Math.min(h, y + half + 1);
@@ -1440,11 +1489,11 @@ function applyFilterToImage(imageData, filter) {
                     const count = (x2 - x1) * (y2 - y1);
                     const localMean = sum / count;
                     const idx = (y * w + x) * 4;
-                    const v = blurred[y * w + x] > (localMean - offset) ? 255 : 0;
+                    const v = corrected[y * w + x] > (localMean - offset) ? 255 : 0;
                     data[idx] = data[idx + 1] = data[idx + 2] = v;
                 }
             }
-            // 5. Remove isolated noise pixels (salt & pepper)
+            // 7. Remove isolated noise pixels (salt & pepper)
             for (let y = h - 2; y >= 1; y--) {
                 const rowOff = y * w;
                 for (let x = w - 2; x >= 1; x--) {
