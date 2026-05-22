@@ -1250,15 +1250,17 @@ function showAdjustScreen(dataUrl) {
         // Initialize corners (use detected or default)
         if (state.adjustCorners) {
             const vw = adjustState.imgW, vh = adjustState.imgH;
+            // Clamp to [0.02, 0.98] so the 44px corner handles stay visible
+            const clamp = v => Math.max(0.02, Math.min(0.98, v));
             adjustState.corners = [
-                state.adjustCorners[0].x / vw,
-                state.adjustCorners[0].y / vh,
-                state.adjustCorners[1].x / vw,
-                state.adjustCorners[1].y / vh,
-                state.adjustCorners[2].x / vw,
-                state.adjustCorners[2].y / vh,
-                state.adjustCorners[3].x / vw,
-                state.adjustCorners[3].y / vh,
+                clamp(state.adjustCorners[0].x / vw),
+                clamp(state.adjustCorners[0].y / vh),
+                clamp(state.adjustCorners[1].x / vw),
+                clamp(state.adjustCorners[1].y / vh),
+                clamp(state.adjustCorners[2].x / vw),
+                clamp(state.adjustCorners[2].y / vh),
+                clamp(state.adjustCorners[3].x / vw),
+                clamp(state.adjustCorners[3].y / vh),
             ];
         } else {
             const margin = 0.08;
