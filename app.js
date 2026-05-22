@@ -1873,6 +1873,8 @@ $('#btn-adjust-retake').addEventListener('click', () => {
     state.detectedCorners = null;
     state.adjustCorners = null;
     startDetectionLoop();
+    // Update badge back to video stream info (camera is still running)
+    updateStreamInfoBadge();
 });
 
 $('#btn-adjust-done').addEventListener('click', () => {
