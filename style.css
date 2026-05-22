@@ -333,6 +333,12 @@ html, body {
     letter-spacing: 0.2px;
 }
 
+#notch-right {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
 .nav-btn {
     background: none;
     border: none;

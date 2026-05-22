@@ -9,6 +9,8 @@ const state = {
     activePage: -1,            // index of active page in preview
     stream: null,
     facingMode: 'environment',
+    cameras: [],               // [{deviceId, label}] enumerated video inputs
+    activeCameraIdx: 0,
     flash: false,
     detectionActive: false,
     detectedCorners: null,     // normalized [0..1] corners for overlay
@@ -57,22 +59,71 @@ function showScreen(id) {
 //  Camera
 // ============================
 
-async function initCamera() {
+async function enumerateCameras() {
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        state.cameras = devices.filter(d => d.kind === 'videoinput');
+        // Reset active index if current selection is out of range
+        if (state.activeCameraIdx >= state.cameras.length) {
+            state.activeCameraIdx = 0;
+        }
+        return state.cameras;
+    } catch {
+        state.cameras = [];
+        return [];
+    }
+}
+
+async function initCamera(cameraIdx) {
     try {
         if (state.stream) stopCamera();
 
-        const constraints = {
-            video: {
-                facingMode: state.facingMode,
-                width: { min: 1920, ideal: 3840 },
-                height: { min: 1080, ideal: 2160 },
-            },
-            audio: false,
+        // If a specific camera index is given, use its deviceId
+        const videoConstraints = {
+            width: { ideal: 3840 },
+            height: { ideal: 2160 },
         };
 
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (cameraIdx !== undefined && state.cameras[cameraIdx]) {
+            videoConstraints.deviceId = { exact: state.cameras[cameraIdx].deviceId };
+            state.activeCameraIdx = cameraIdx;
+        } else if (state.cameras.length > 0 && state.cameras[state.activeCameraIdx]) {
+            // Use the currently selected camera if available
+            videoConstraints.deviceId = { exact: state.cameras[state.activeCameraIdx].deviceId };
+        } else if (state.facingMode) {
+            videoConstraints.facingMode = state.facingMode;
+        }
+
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+        } catch (firstErr) {
+            // If the error is a missing camera for the requested facingMode
+            // (e.g. 'environment' on a laptop), retry without facingMode so any
+            // available camera is used.
+            if (firstErr.name === 'NotFoundError' || firstErr.name === 'OverconstrainedError') {
+                delete videoConstraints.facingMode;
+                delete videoConstraints.deviceId;
+                stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+                state.facingMode = null;
+            } else {
+                throw firstErr;
+            }
+        }
+
         state.stream = stream;
         video.srcObject = stream;
+
+        // Match the active track's deviceId against our camera list so
+        // activeCameraIdx stays correct even when getUserMedia picks via facingMode
+        const activeTrack = stream.getVideoTracks()[0];
+        if (activeTrack) {
+            const settings = activeTrack.getSettings();
+            if (settings && settings.deviceId) {
+                const match = state.cameras.findIndex(c => c.deviceId === settings.deviceId);
+                if (match >= 0) state.activeCameraIdx = match;
+            }
+        }
 
         return new Promise((resolve) => {
             video.onloadedmetadata = () => {
@@ -87,11 +138,23 @@ async function initCamera() {
                     }
                 }
 
+                // Enumerate cameras now that we have permission (labels will be populated)
+                enumerateCameras().then(() => updateCameraBtn());
+
                 resolve(true);
             };
         });
     } catch (err) {
         console.error('Camera error:', err);
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+            showToast('请在系统设置中允许相机访问');
+        } else if (err.name === 'NotFoundError') {
+            showToast('未检测到摄像头设备');
+        } else if (err.name === 'OverconstrainedError' || err.name === 'ConstraintNotSatisfiedError') {
+            showToast('当前分辨率不受支持，请降低相机设置');
+        } else {
+            showToast('无法启动相机：' + (err.message || '未知错误'));
+        }
         return false;
     }
 }
@@ -102,6 +165,7 @@ function stopCamera() {
         state.stream = null;
     }
     video.srcObject = null;
+    updateCameraBtn();
 }
 
 function toggleFlash() {
@@ -1557,8 +1621,35 @@ function downloadBlob(blob, filename) {
 //  Event Handlers
 // ============================
 
+// Camera switch
+function updateCameraBtn() {
+    const btn = $('#btn-switch-camera');
+    if (!btn) return;
+    btn.style.display = (state.cameras.length > 1) ? '' : 'none';
+}
+
+async function switchCamera() {
+    if (state.cameras.length < 2) return;
+    const nextIdx = (state.activeCameraIdx + 1) % state.cameras.length;
+    if (state.stream) {
+        // Camera is running — stop detection before switching stream
+        stopDetectionLoop();
+        const success = await initCamera(nextIdx);
+        if (success) {
+            hideCameraPrompt();
+            startDetectionLoop();
+        }
+    } else {
+        // Camera hasn't started yet — just mark the selection
+        state.activeCameraIdx = nextIdx;
+    }
+}
+
 // Flash toggle
 $('#btn-flash').addEventListener('click', toggleFlash);
+
+// Camera switch
+$('#btn-switch-camera').addEventListener('click', switchCamera);
 
 // Close scanner (stop camera)
 $('#btn-close').addEventListener('click', () => {
@@ -1842,6 +1933,10 @@ document.head.appendChild(styleSheet);
 function init() {
     showCameraPrompt();
     initCornerDrag();
+
+    // Pre-enumerate cameras (without permission, labels are empty,
+    // but the count is correct — enough to show the switch button)
+    enumerateCameras().then(() => updateCameraBtn());
 
     // If there's no camera, still allow image upload
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
