@@ -1402,43 +1402,68 @@ function applyFilterToImage(imageData, filter) {
         }
 
         case 'bw': {
-            // First convert to grayscale
-            for (let i = 0; i < len; i++) {
-                const idx = i * 4;
-                const gray = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-                data[idx] = gray;
-                data[idx + 1] = gray;
-                data[idx + 2] = gray;
-            }
-            // Then apply adaptive threshold using local mean
             const w = imageData.width;
             const h = imageData.height;
-            const grayValues = new Float32Array(len);
-            for (let i = 0; i < len; i++) {
-                grayValues[i] = data[i * 4];
+            // 1. Grayscale
+            const gray = new Float32Array(w * h);
+            for (let i = 0; i < w * h; i++) {
+                const idx = i * 4;
+                gray[i] = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
             }
-
-            const blockSize = Math.max(8, Math.floor(Math.min(w, h) / 16));
-            const halfBlock = Math.floor(blockSize / 2);
-
+            // 2. Light blur to suppress noise
+            const blurred = boxBlur(gray, w, h, 1);
+            // 3. Integral image for O(1) local-mean queries
+            const iw = w + 1, ih = h + 1;
+            const integral = new Float32Array(iw * ih);
             for (let y = 0; y < h; y++) {
+                const rowOff = y * w;
+                const intOff = (y + 1) * iw;
+                const intOffPrev = y * iw;
+                let rowSum = 0;
                 for (let x = 0; x < w; x++) {
-                    let sum = 0, count = 0;
-                    for (let dy = -halfBlock; dy <= halfBlock; dy++) {
-                        for (let dx = -halfBlock; dx <= halfBlock; dx++) {
-                            const nx = x + dx, ny = y + dy;
-                            if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
-                                sum += grayValues[ny * w + nx];
-                                count++;
-                            }
-                        }
-                    }
+                    rowSum += blurred[rowOff + x];
+                    integral[intOff + (x + 1)] = integral[intOffPrev + (x + 1)] + rowSum;
+                }
+            }
+            // 4. Adaptive threshold — larger block, tighter offset
+            const blockSize = Math.max(32, Math.floor(Math.min(w, h) / 4));
+            const half = blockSize >> 1;
+            const offset = 8;
+            for (let y = 0; y < h; y++) {
+                const y1 = Math.max(0, y - half);
+                const y2 = Math.min(h, y + half + 1);
+                for (let x = 0; x < w; x++) {
+                    const x1 = Math.max(0, x - half);
+                    const x2 = Math.min(w, x + half + 1);
+                    const sum = integral[y2 * iw + x2] - integral[y1 * iw + x2]
+                              - integral[y2 * iw + x1] + integral[y1 * iw + x1];
+                    const count = (x2 - x1) * (y2 - y1);
                     const localMean = sum / count;
                     const idx = (y * w + x) * 4;
-                    const val = grayValues[y * w + x] > localMean - 5 ? 255 : 0;
-                    data[idx] = val;
-                    data[idx + 1] = val;
-                    data[idx + 2] = val;
+                    const v = blurred[y * w + x] > (localMean - offset) ? 255 : 0;
+                    data[idx] = data[idx + 1] = data[idx + 2] = v;
+                }
+            }
+            // 5. Remove isolated noise pixels (salt & pepper)
+            for (let y = h - 2; y >= 1; y--) {
+                const rowOff = y * w;
+                for (let x = w - 2; x >= 1; x--) {
+                    const idx = rowOff + x;
+                    const v = data[idx * 4];
+                    let same = 0;
+                    const ni = idx - w - 1;
+                    if (data[ni * 4] === v) same++;
+                    if (data[(ni + 1) * 4] === v) same++;
+                    if (data[(ni + 2) * 4] === v) same++;
+                    if (data[(idx - 1) * 4] === v) same++;
+                    if (data[(idx + 1) * 4] === v) same++;
+                    if (data[(idx + w - 1) * 4] === v) same++;
+                    if (data[(idx + w) * 4] === v) same++;
+                    if (data[(idx + w + 1) * 4] === v) same++;
+                    if (same < 3) {
+                        const flip = v === 0 ? 255 : 0;
+                        data[idx * 4] = data[idx * 4 + 1] = data[idx * 4 + 2] = flip;
+                    }
                 }
             }
             break;
@@ -1501,18 +1526,35 @@ function applyFilterToImage(imageData, filter) {
     return imageData;
 }
 
+// Processing overlay
+let processingOverlay = null;
+function showProcessingOverlay() {
+    if (!processingOverlay) {
+        processingOverlay = document.createElement('div');
+        processingOverlay.className = 'processing-overlay';
+        processingOverlay.innerHTML = '<div class="processing-box"><div class="spinner"></div><span id="processing-text">处理中…</span></div>';
+        document.body.appendChild(processingOverlay);
+    }
+    processingOverlay.style.display = 'flex';
+}
+
+function hideProcessingOverlay() {
+    if (processingOverlay) processingOverlay.style.display = 'none';
+}
+
 function renderFilteredPage(pageIndex) {
     const page = state.pages[pageIndex];
     if (!page) return;
 
     const img = $('#preview-image');
     if (page.filter === 'original') {
-        // Show original
         img.src = page.dataUrl;
         return;
     }
 
-    // Apply filter
+    // Apply filter with progress indicator
+    showProcessingOverlay();
+
     const canvas = document.createElement('canvas');
     const tempImg = new Image();
     tempImg.onload = () => {
@@ -1520,10 +1562,16 @@ function renderFilteredPage(pageIndex) {
         canvas.height = tempImg.naturalHeight;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(tempImg, 0, 0);
-        let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        imageData = applyFilterToImage(imageData, page.filter);
-        ctx.putImageData(imageData, 0, 0);
-        img.src = canvas.toDataURL('image/jpeg', 0.92);
+        // Defer processing so the overlay renders first
+        requestAnimationFrame(() => {
+            setTimeout(() => {
+                let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                imageData = applyFilterToImage(imageData, page.filter);
+                ctx.putImageData(imageData, 0, 0);
+                img.src = canvas.toDataURL('image/jpeg', 0.92);
+                hideProcessingOverlay();
+            }, 20);
+        });
     };
     tempImg.src = page.dataUrl;
 }

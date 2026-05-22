@@ -993,3 +993,46 @@ body {
         color: var(--yellow);
     }
 }
+
+/* ============================
+   Processing Overlay
+   ============================ */
+.processing-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.4);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+.processing-box {
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 16px;
+    padding: 28px 36px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.18);
+}
+
+#processing-text {
+    font-size: 15px;
+    font-weight: 500;
+    font-family: var(--font);
+    color: #333;
+    letter-spacing: 0.3px;
+}
+
+@media (prefers-color-scheme: dark) {
+    .processing-box {
+        background: rgba(50, 50, 54, 0.95);
+    }
+    #processing-text {
+        color: #eee;
+    }
+}
