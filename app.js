@@ -961,32 +961,60 @@ function autoCapture() {
     }, 100);
 }
 
-function performCapture() {
+async function performCapture() {
     // Stop detection loop while in adjust/preview
     stopDetectionLoop();
 
     try {
-        // Create a canvas at full resolution
-        const vw = video.videoWidth;
-        const vh = video.videoHeight;
-        console.log(`Capture resolution: ${vw}×${vh}`);
-        const canvas = document.createElement('canvas');
-        canvas.width = vw;
-        canvas.height = vh;
-        const ctx = canvas.getContext('2d');
+        // Try high-res photo via ImageCapture API (Android only, iOS falls back)
+        let dataUrl;
+        let photoW, photoH;
+        const track = state.stream ? state.stream.getVideoTracks()[0] : null;
 
-        // If facing front, mirror the image
-        if (state.facingMode === 'user') {
-            ctx.translate(vw, 0);
-            ctx.scale(-1, 1);
+        if (track && window.ImageCapture) {
+            try {
+                const capture = new ImageCapture(track);
+                const blob = await capture.takePhoto();
+                photoW = blob.width || (await blobToImg(blob)).naturalWidth;
+                photoH = blob.height || (await blobToImg(blob)).naturalHeight;
+                dataUrl = await blobToDataURL(blob);
+                console.log(`Capture: ImageCapture API — ${photoW}×${photoH}`);
+            } catch (photoErr) {
+                console.warn('ImageCapture fallback to video frame:', photoErr.message);
+                // Fall through to video frame capture below
+                dataUrl = null;
+            }
         }
-        ctx.drawImage(video, 0, 0, vw, vh);
 
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+        if (!dataUrl) {
+            // Fallback: capture video frame at stream resolution
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
+            console.log(`Capture: Video frame — ${vw}×${vh}`);
+            const canvas = document.createElement('canvas');
+            canvas.width = vw;
+            canvas.height = vh;
+            const ctx = canvas.getContext('2d');
 
-        // Save detected corners for the adjust screen (in original image coordinates)
+            if (state.facingMode === 'user') {
+                ctx.translate(vw, 0);
+                ctx.scale(-1, 1);
+            }
+            ctx.drawImage(video, 0, 0, vw, vh);
+
+            dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+            photoW = vw;
+            photoH = vh;
+        }
+
+        // Save detected corners, scaled to match the actual captured resolution
         if (state.detectedCorners) {
-            state.adjustCorners = state.detectedCorners.map(c => ({ ...c }));
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
+            state.adjustCorners = state.detectedCorners.map(c => ({
+                x: c.x * (photoW / vw),
+                y: c.y * (photoH / vh),
+            }));
         } else {
             state.adjustCorners = null;
         }
@@ -995,7 +1023,7 @@ function performCapture() {
         state.pages.push({ dataUrl, filter: 'original' });
         state.activePage = state.pages.length - 1;
 
-        // Show the adjust screen with ORIGINAL (unwarped) image
+        // Show the adjust screen
         showAdjustScreen(dataUrl);
 
     } catch (err) {
@@ -1694,6 +1722,23 @@ async function generatePDF(pages) {
     }
 }
 
+function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
+function blobToImg(blob) {
+    const url = URL.createObjectURL(blob);
+    return loadImage(url).then(img => {
+        URL.revokeObjectURL(url);
+        return img;
+    });
+}
+
 function loadImage(src) {
     return new Promise((resolve, reject) => {
         const img = new Image();
@@ -1848,12 +1893,46 @@ $('#btn-adjust-done').addEventListener('click', () => {
 });
 
 // Preview screen
+// ============================
+//  PWA Install Banner
+// ============================
+
+function isStandalone() {
+    return window.navigator.standalone === true ||
+           window.matchMedia('(display-mode: standalone)').matches;
+}
+
+function showPWABanner() {
+    const banner = $('#pwa-banner');
+    if (!banner) return;
+    // Only show if NOT already in standalone / home-screen mode
+    // AND the user hasn't dismissed it before
+    if (!isStandalone() && !localStorage.getItem('pwa_banner_dismissed')) {
+        banner.style.display = 'flex';
+    }
+}
+
+function hidePWABanner() {
+    const banner = $('#pwa-banner');
+    if (banner) banner.style.display = 'none';
+}
+
+function dismissPWABanner() {
+    localStorage.setItem('pwa_banner_dismissed', '1');
+    hidePWABanner();
+}
+
 function showPreviewScreen() {
     showScreen('#screen-preview');
     updatePageThumbnails();
     renderFilteredPage(state.activePage);
     updateFilterSelection();
+    // Show PWA prompt after first scan completes
+    showPWABanner();
 }
+
+// PWA banner dismiss
+$('#btn-dismiss-pwa').addEventListener('click', dismissPWABanner);
 
 // Preview buttons
 $('#btn-preview-back').addEventListener('click', () => {
