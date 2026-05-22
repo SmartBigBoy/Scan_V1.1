@@ -1043,8 +1043,6 @@ let adjustState = {
     offsetX: 0,
     offsetY: 0,
     imageData: null,
-    sourceCanvas: null,
-    displayCanvas: null,
 };
 
 function showAdjustScreen(dataUrl) {
@@ -1118,17 +1116,9 @@ function showAdjustScreen(dataUrl) {
         const fctx = fullCanvas.getContext('2d');
         fctx.drawImage(img, 0, 0);
         adjustState.imageData = fctx.getImageData(0, 0, adjustState.imgW, adjustState.imgH);
-        adjustState.sourceCanvas = fullCanvas;
 
-        // Display-sized canvas for magnifier (matches screen coordinates exactly)
-        const dispCanvas = document.createElement('canvas');
-        dispCanvas.width = Math.round(adjustState.displayW);
-        dispCanvas.height = Math.round(adjustState.displayH);
-        const dctx = dispCanvas.getContext('2d');
-        dctx.drawImage(img, 0, 0, dispCanvas.width, dispCanvas.height);
-        adjustState.displayCanvas = dispCanvas;
-        // If magnifier is active, redraw it with the new display canvas
-        if (adjustState.dragging >= 0) updateMagnifier();
+        // (magnifier now samples from the original image directly,
+        // so no display-sized intermediate canvas is needed)
 
         updateAdjustOverlay();
         updateCornerHandles();
@@ -1175,23 +1165,28 @@ function initCornerDrag() {
     function updateMagnifier() {
         var idx = adjustState.dragging;
         if (idx < 0) return;
-        var dispCanvas = adjustState.displayCanvas;
-        if (!dispCanvas) return;
+        var img = document.getElementById('adjust-image');
+        if (!img || !img.complete) return;
         var normX = adjustState.corners[idx * 2];
         var normY = adjustState.corners[idx * 2 + 1];
-        // Use display canvas coordinates (matches magnifier position exactly)
-        var cx = normX * dispCanvas.width;
-        var cy = normY * dispCanvas.height;
-        var srcSize = 20;
+        // Sample directly from the original image in natural coordinates,
+        // avoiding coordinate mismatch from the intermediate display canvas
+        // whose dimensions are rounded (Math.round) vs. unrounded DOM coords.
+        var outSize = 60;
+        var zoom = 3;
+        var displayScaleX = adjustState.displayW / adjustState.imgW;
+        var srcSize = (outSize / zoom) / displayScaleX;
+        var cx = normX * adjustState.imgW;
+        var cy = normY * adjustState.imgH;
         var half = srcSize / 2;
-        var sx = Math.round(Math.max(0, Math.min(dispCanvas.width - srcSize, cx - half)));
-        var sy = Math.round(Math.max(0, Math.min(dispCanvas.height - srcSize, cy - half)));
-        magCtx.clearRect(0, 0, 60, 60);
+        var sx = Math.max(0, Math.min(adjustState.imgW - srcSize, cx - half));
+        var sy = Math.max(0, Math.min(adjustState.imgH - srcSize, cy - half));
+        magCtx.clearRect(0, 0, outSize, outSize);
         magCtx.save();
         magCtx.beginPath();
-        magCtx.arc(30, 30, 29, 0, Math.PI * 2);
+        magCtx.arc(outSize / 2, outSize / 2, outSize / 2 - 1, 0, Math.PI * 2);
         magCtx.clip();
-        magCtx.drawImage(dispCanvas, sx, sy, srcSize, srcSize, 0, 0, 60, 60);
+        magCtx.drawImage(img, sx, sy, srcSize, srcSize, 0, 0, outSize, outSize);
         magCtx.restore();
     }
 
