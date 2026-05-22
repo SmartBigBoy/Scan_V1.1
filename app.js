@@ -64,8 +64,8 @@ async function initCamera() {
         const constraints = {
             video: {
                 facingMode: state.facingMode,
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
+                width: { min: 1920, ideal: 3840 },
+                height: { min: 1080, ideal: 2160 },
             },
             audio: false,
         };
@@ -77,6 +77,16 @@ async function initCamera() {
         return new Promise((resolve) => {
             video.onloadedmetadata = () => {
                 video.play();
+
+                // Apply continuous autofocus if supported
+                const track = stream.getVideoTracks()[0];
+                if (track && track.applyConstraints) {
+                    const caps = track.getCapabilities();
+                    if (caps.focusMode && caps.focusMode.includes('continuous')) {
+                        track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+                    }
+                }
+
                 resolve(true);
             };
         });
@@ -857,6 +867,7 @@ function performCapture() {
         // Create a canvas at full resolution
         const vw = video.videoWidth;
         const vh = video.videoHeight;
+        console.log(`Capture resolution: ${vw}×${vh}`);
         const canvas = document.createElement('canvas');
         canvas.width = vw;
         canvas.height = vh;
