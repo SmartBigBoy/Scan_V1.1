@@ -902,6 +902,17 @@ html, body {
     display: block;
 }
 
+/* Inside adjust hint — centered inline, not absolute positioned */
+#adjust-hint .capture-badge {
+    position: static;
+    display: inline-block;
+    background: rgba(0,0,0,0.35);
+    font-size: 12px;
+}
+#adjust-hint .capture-badge.visible {
+    display: inline-block;
+}
+
 /* Preview bottom actions */
 #preview-actions {
     display: flex;
