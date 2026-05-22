@@ -172,8 +172,7 @@ function stopCamera() {
     updateCameraBtn();
     // If we have prior capture info, keep showing it; otherwise clear badge
     if (!state.captureInfo.mode) {
-        const badge = $('#capture-badge');
-        if (badge) badge.classList.remove('visible');
+        $$('.capture-badge').forEach(el => el.classList.remove('visible'));
     }
 }
 
@@ -1921,30 +1920,31 @@ $('#btn-adjust-done').addEventListener('click', () => {
 // ============================
 
 function updateCaptureBadge() {
-    const badge = $('#capture-badge');
-    if (!badge) return;
+    const els = $$('.capture-badge');
+    if (!els.length) return;
     const info = state.captureInfo;
     if (info && info.mode) {
+        let text;
         if (info.width) {
-            badge.textContent = `${info.mode} · ${info.width}×${info.height}`;
+            text = `${info.mode} · ${info.width}×${info.height}`;
         } else {
-            badge.textContent = info.mode;
+            text = info.mode;
         }
-        badge.classList.add('visible');
+        els.forEach(el => { el.textContent = text; el.classList.add('visible'); });
     } else {
-        badge.classList.remove('visible');
+        els.forEach(el => el.classList.remove('visible'));
     }
 }
 
 // Also show stream resolution while camera is running (pre-capture)
 function updateStreamInfoBadge() {
-    const badge = $('#capture-badge');
-    if (!badge) return;
+    const els = $$('.capture-badge');
+    if (!els.length) return;
     if (state.stream && video.videoWidth) {
-        badge.textContent = `VideoStream · ${video.videoWidth}×${video.videoHeight}`;
-        badge.classList.add('visible');
+        const text = `VideoStream · ${video.videoWidth}×${video.videoHeight}`;
+        els.forEach(el => { el.textContent = text; el.classList.add('visible'); });
     } else if (!state.captureInfo.mode) {
-        badge.classList.remove('visible');
+        els.forEach(el => el.classList.remove('visible'));
     }
 }
 
