@@ -820,8 +820,8 @@ let noDocCount = 0;
 let lastDetectTime = 0;
 const DETECT_INTERVAL = 80;     // ms (≈12 fps)
 const MAX_HISTORY = 12;          // frames of corner history
-const STABLE_REQUIRED = 7;       // consecutive stable frames before capture
-const NO_DOC_LIMIT = 10;         // frames without doc before resetting
+const STABLE_REQUIRED = 5;       // consecutive stable frames before capture
+const NO_DOC_LIMIT = 15;         // frames without doc before resetting
 
 function startDetectionLoop() {
     if (state.animationId) return;
@@ -865,11 +865,11 @@ function startDetectionLoop() {
             // Calculate stability (0-1) based on corner position variance
             const stability = calcStability(cornerHistory);
 
-            // State machine — require all 3: good geometry, sharp edges, sharp image
+            // State machine — geometry + stability + soft sharpness guard
             const hasGoodQuality = quality > 0.25;
-            const hasSharpEdges = boundarySharpness > 0.35;
-            const isInFocus = perceptualSharpness > 0.25;
-            const isStable = stability > 0.50;
+            const hasSharpEdges = boundarySharpness > 0.08;
+            const isInFocus = perceptualSharpness > 0.03;
+            const isStable = stability > 0.40;
 
             if (hasGoodQuality && hasSharpEdges && isInFocus && isStable) {
                 // Good quality AND stable → STABLE
@@ -1758,8 +1758,8 @@ function applyFilterToImage(imageData, filter) {
             }
 
             // 6. Adaptive threshold with dynamic offset
-            //    Smaller block size (min/20 vs old min/4) for better local adaptation
-            const blockSize = Math.max(16, Math.floor(Math.min(w, h) / 20));
+            //    Larger block than before for smoother local means (less edge noise)
+            const blockSize = Math.max(24, Math.floor(Math.min(w, h) / 16));
             const half = blockSize >> 1;
             for (let y = 0; y < h; y++) {
                 const y1 = Math.max(0, y - half);
@@ -1771,16 +1771,46 @@ function applyFilterToImage(imageData, filter) {
                               - integral[y2 * iw + x1] + integral[y1 * iw + x1];
                     const count = (x2 - x1) * (y2 - y1);
                     const localMean = sum / count;
-                    // Adaptive offset: brighter areas get more aggressive thresholding
-                    // Darker areas get gentler treatment to preserve strokes
-                    const adaptiveOffset = Math.max(6, Math.min(22, localMean * 0.08));
+                    // Adaptive offset: brighter areas more aggressive (clean bg),
+                    // darker areas gentler (preserve strokes).
+                    // Higher base offset prevents blurry strokes from bloating.
+                    const adaptiveOffset = Math.max(8, Math.min(28, localMean * 0.10 + 3));
                     const idx = (y * w + x) * 4;
                     const v = corrected[y * w + x] > (localMean - adaptiveOffset) ? 255 : 0;
                     data[idx] = data[idx + 1] = data[idx + 2] = v;
                 }
             }
 
-            // 7. Remove isolated noise pixels (salt & pepper)
+            // 7. Morphological erosion (3×3) — thin strokes, remove edge noise
+            //    Uses a temp buffer to avoid in-place read/write conflicts
+            const eroded = new Uint8Array(pix);
+            for (let y = 1; y < h - 1; y++) {
+                const rowOff = y * w;
+                for (let x = 1; x < w - 1; x++) {
+                    const idx = rowOff + x;
+                    const v = data[idx * 4];
+                    // Erosion: a black pixel stays black only if ALL neighbors
+                    // are black. Otherwise it becomes white.
+                    if (v === 0) {
+                        let allBlack = true;
+                        for (let dy = -1; dy <= 1 && allBlack; dy++) {
+                            for (let dx = -1; dx <= 1 && allBlack; dx++) {
+                                if (data[(idx + dy * w + dx) * 4] !== 0) allBlack = false;
+                            }
+                        }
+                        eroded[idx] = allBlack ? 0 : 255;
+                    } else {
+                        eroded[idx] = 255;
+                    }
+                }
+            }
+            // Copy eroded back to RGBA
+            for (let i = 0; i < pix; i++) {
+                const idx = i * 4;
+                data[idx] = data[idx + 1] = data[idx + 2] = eroded[i];
+            }
+
+            // 8. Remove isolated noise pixels (salt & pepper)
             //    2-pass: first isolated black, then isolated white
             for (let pass = 0; pass < 2; pass++) {
                 const targetVal = pass === 0 ? 0 : 255;
@@ -2368,17 +2398,35 @@ $('#btn-share').addEventListener('click', async () => {
     if (!page) return;
 
     try {
-        const response = await fetch(page.dataUrl);
-        const blob = await response.blob();
+        // Convert dataURL → Blob directly (no fetch — works on all mobile browsers)
+        const parts = page.dataUrl.split(',');
+        const mime = parts[0].match(/:(.*?);/)[1] || 'image/jpeg';
+        const bstr = atob(parts[1]);
+        const u8arr = new Uint8Array(bstr.length);
+        for (let i = 0; i < bstr.length; i++) {
+            u8arr[i] = bstr.charCodeAt(i);
+        }
+        const blob = new Blob([u8arr], { type: mime });
+        const filename = `扫描_${formatDate()}.jpg`;
 
         if (navigator.share) {
-            await navigator.share({
-                title: '扫描文稿',
-                files: [new File([blob], `扫描_${formatDate()}.jpg`, { type: 'image/jpeg' })],
-            });
-        } else {
-            downloadBlob(blob, `扫描_${formatDate()}.jpg`);
+            try {
+                await navigator.share({
+                    title: '扫描文稿',
+                    files: [new File([blob], filename, { type: mime })],
+                });
+                return;
+            } catch (shareErr) {
+                // If user cancelled or share not supported, fallback to download
+                if (shareErr.name !== 'AbortError') {
+                    console.warn('Share failed, falling back to download:', shareErr);
+                } else {
+                    return; // user cancelled, do nothing
+                }
+            }
         }
+        // Fallback: download the image
+        downloadBlob(blob, filename);
     } catch (err) {
         console.error('Share error:', err);
         showToast('分享失败');
