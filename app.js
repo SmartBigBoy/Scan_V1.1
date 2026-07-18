@@ -21,6 +21,7 @@ const state = {
     adjustCorners: null,         // detected corners in original image coordinates
     isMobile: /iPhone|iPad|iPod|Android/i.test(navigator.userAgent),
     autoCapture: true,           // auto-capture when document is stable
+    scanMode: 'single',          // 'single' | 'continuous'
     captureInfo: { mode: '', width: 0, height: 0 },  // last capture mode & resolution
 };
 
@@ -228,30 +229,46 @@ function sobel(gray, w, h) {
     return mag;
 }
 
-function boxBlur(gray, w, h, radius) {
-    const result = new Float32Array(w * h);
-    const size = 2 * radius + 1;
-    const norm = 1 / (size * size);
-    for (let y = radius; y < h - radius; y++) {
-        for (let x = radius; x < w - radius; x++) {
-            let sum = 0;
-            for (let ky = -radius; ky <= radius; ky++) {
-                for (let kx = -radius; kx <= radius; kx++) {
-                    sum += gray[(y + ky) * w + (x + kx)];
-                }
+// Non-maximum suppression: thin edges to single-pixel width
+// Compares each pixel's edge magnitude along the gradient direction
+// and suppresses non-maximal values. This significantly reduces
+// the number of false edge pixels from text/noise.
+function nonMaxSuppression(mag, gray, w, h) {
+    for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+            const p = y * w + x;
+            const val = mag[p];
+            if (val < 1) continue;
+
+            // Compute gradient direction from the grayscale image
+            const sx = gray[(y+1)*w + x-1] + 2*gray[(y+1)*w + x] + gray[(y+1)*w + x+1]
+                     - gray[(y-1)*w + x-1] - 2*gray[(y-1)*w + x] - gray[(y-1)*w + x+1];
+            const sy = gray[(y-1)*w + x+1] + 2*gray[y*w + x+1] + gray[(y+1)*w + x+1]
+                     - gray[(y-1)*w + x-1] - 2*gray[y*w + x-1] - gray[(y+1)*w + x-1];
+
+            // Quantize angle to 4 directions
+            const angle = Math.atan2(sy, sx) * 180 / Math.PI;
+            let d1, d2;
+
+            if ((angle >= -22.5 && angle < 22.5) || (angle >= 157.5 || angle < -157.5)) {
+                d1 = mag[p - 1];
+                d2 = mag[p + 1];
+            } else if ((angle >= 22.5 && angle < 67.5) || (angle >= -157.5 && angle < -112.5)) {
+                d1 = mag[p - w + 1];
+                d2 = mag[p + w - 1];
+            } else if ((angle >= 67.5 && angle < 112.5) || (angle >= -112.5 && angle < -67.5)) {
+                d1 = mag[p - w];
+                d2 = mag[p + w];
+            } else {
+                d1 = mag[p - w - 1];
+                d2 = mag[p + w + 1];
             }
-            result[y * w + x] = sum * norm;
+
+            if (val < d1 || val < d2) {
+                mag[p] = 0;
+            }
         }
     }
-    // Copy edge pixels
-    for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-            if (y < radius || y >= h - radius || x < radius || x >= w - radius) {
-                result[y * w + x] = gray[y * w + x];
-            }
-        }
-    }
-    return result;
 }
 
 // Fast separable box blur — O(n) regardless of radius (two-pass 1D sliding window)
@@ -300,29 +317,61 @@ function percentileThreshold(data, pct = 0.85) {
 
 function detectBoundaries(edges, gray, w, h, threshold) {
     const topPts = [], bottomPts = [], leftPts = [], rightPts = [];
-    const minRun = 2;
+    const minRun = 1;  // NMS thins edges to 1px — single reliable pixels are enough
 
-    // Top scan: find first run of consecutive edge pixels
+    // Compute adaptive brightness threshold based on image dynamic range
+    let gMin = 255, gMax = 0;
+    for (let i = 0; i < w * h; i++) {
+        const v = gray[i];
+        if (v < gMin) gMin = v;
+        if (v > gMax) gMax = v;
+    }
+    const brightnessThreshold = Math.max(12, (gMax - gMin) * 0.18);
+
+    // Scan helper: scan from border inward, find first run of strong edges.
+    // Returns the y-position of the first run whose average magnitude
+    // exceeds a minimum threshold (to skip weak noise).
+    function scanFirstRun(values, start, end, step) {
+        let i = start;
+        while ((step > 0 && i <= end) || (step < 0 && i >= end)) {
+            if (values[i] > threshold) {
+                let runLen = 0;
+                let runSum = 0;
+                while ((step > 0 && i <= end && values[i] > threshold) ||
+                       (step < 0 && i >= end && values[i] > threshold)) {
+                    runSum += values[i];
+                    runLen++;
+                    i += step;
+                }
+                if (runLen >= minRun) {
+                    const avgMag = runSum / runLen;
+                    // If the run is strong enough (≥70% of the global edge threshold),
+                    // accept it. Otherwise continue scanning — weak noise should be skipped.
+                    if (avgMag >= threshold * 0.7) {
+                        return { y: step > 0 ? i - runLen : i + Math.floor(runLen / 2), found: true };
+                    }
+                }
+            }
+            i += step;
+        }
+        return { y: -1, found: false };
+    }
+
+    // Top scan: first strong edge pixel from top, per column
     for (let x = 2; x < w - 2; x++) {
         let found = false;
-        let run = 0;
         for (let y = 2; y < h - 2; y++) {
-            if (edges[y * w + x] > threshold) {
-                run++;
-                if (run >= minRun) {
-                    topPts.push({ x, y: y - minRun + 1 });
-                    found = true;
-                    break;
-                }
-            } else {
-                run = 0;
+            const val = edges[y * w + x];
+            if (val > threshold && val >= threshold * 0.7) {
+                topPts.push({ x, y });
+                found = true;
+                break;
             }
         }
-        // Fallback: brightness transition (dark→bright = paper edge)
         if (!found) {
             for (let y = 2; y < h - 2; y++) {
                 const diff = gray[y * w + x] - gray[(y - 1) * w + x];
-                if (diff > 25) {
+                if (diff > brightnessThreshold) {
                     topPts.push({ x, y });
                     break;
                 }
@@ -330,26 +379,21 @@ function detectBoundaries(edges, gray, w, h, threshold) {
         }
     }
 
-    // Bottom scan
+    // Bottom scan: first strong edge pixel from bottom, per column
     for (let x = 2; x < w - 2; x++) {
         let found = false;
-        let run = 0;
         for (let y = h - 3; y > 1; y--) {
-            if (edges[y * w + x] > threshold) {
-                run++;
-                if (run >= minRun) {
-                    bottomPts.push({ x, y: y + minRun - 1 });
-                    found = true;
-                    break;
-                }
-            } else {
-                run = 0;
+            const val = edges[y * w + x];
+            if (val > threshold && val >= threshold * 0.7) {
+                bottomPts.push({ x, y });
+                found = true;
+                break;
             }
         }
         if (!found) {
             for (let y = h - 3; y > 1; y--) {
                 const diff = gray[(y + 1) * w + x] - gray[y * w + x];
-                if (diff > 25) {
+                if (diff > brightnessThreshold) {
                     bottomPts.push({ x, y });
                     break;
                 }
@@ -357,26 +401,21 @@ function detectBoundaries(edges, gray, w, h, threshold) {
         }
     }
 
-    // Left scan
+    // Left scan: first strong edge pixel from left, per row
     for (let y = 2; y < h - 2; y++) {
         let found = false;
-        let run = 0;
         for (let x = 2; x < w - 2; x++) {
-            if (edges[y * w + x] > threshold) {
-                run++;
-                if (run >= minRun) {
-                    leftPts.push({ x: x - minRun + 1, y });
-                    found = true;
-                    break;
-                }
-            } else {
-                run = 0;
+            const val = edges[y * w + x];
+            if (val > threshold && val >= threshold * 0.7) {
+                leftPts.push({ x, y });
+                found = true;
+                break;
             }
         }
         if (!found) {
             for (let x = 2; x < w - 2; x++) {
                 const diff = gray[y * w + x] - gray[y * w + (x - 1)];
-                if (diff > 25) {
+                if (diff > brightnessThreshold) {
                     leftPts.push({ x, y });
                     break;
                 }
@@ -384,26 +423,21 @@ function detectBoundaries(edges, gray, w, h, threshold) {
         }
     }
 
-    // Right scan
+    // Right scan: first strong edge pixel from right, per row
     for (let y = 2; y < h - 2; y++) {
         let found = false;
-        let run = 0;
         for (let x = w - 3; x > 1; x--) {
-            if (edges[y * w + x] > threshold) {
-                run++;
-                if (run >= minRun) {
-                    rightPts.push({ x: x + minRun - 1, y });
-                    found = true;
-                    break;
-                }
-            } else {
-                run = 0;
+            const val = edges[y * w + x];
+            if (val > threshold && val >= threshold * 0.7) {
+                rightPts.push({ x, y });
+                found = true;
+                break;
             }
         }
         if (!found) {
             for (let x = w - 3; x > 1; x--) {
                 const diff = gray[y * w + (x + 1)] - gray[y * w + x];
-                if (diff > 25) {
+                if (diff > brightnessThreshold) {
                     rightPts.push({ x, y });
                     break;
                 }
@@ -536,6 +570,63 @@ function lineIntersection(l1, l2) {
 }
 
 // ============================
+//  Boundary Sharpness & Focus
+// ============================
+
+// Computes how sharp the document boundary is by sampling Sobel magnitudes
+// along the 4 edges. A high score means the boundary edges are significantly
+// stronger than average — indicating a real in-focus document edge rather than
+// a blurry boundary or non-document object.
+function computeBoundarySharpness(edges, w, h, corners, overallMeanMag) {
+    // Sample ~30 points along each edge
+    const samplesPerEdge = 30;
+    let totalMag = 0;
+    let sampleCount = 0;
+
+    for (let e = 0; e < 4; e++) {
+        const from = corners[e];
+        const to = corners[(e + 1) % 4];
+        for (let s = 0; s < samplesPerEdge; s++) {
+            const t = (s + 0.5) / samplesPerEdge;
+            const x = Math.round(from.x + (to.x - from.x) * t);
+            const y = Math.round(from.y + (to.y - from.y) * t);
+            if (x >= 0 && x < w && y >= 0 && y < h) {
+                totalMag += edges[y * w + x];
+                sampleCount++;
+            }
+        }
+    }
+
+    if (sampleCount === 0) return 0;
+    const boundaryMean = totalMag / sampleCount;
+
+    // Score: ratio of boundary edge strength to overall mean
+    // A score > 1 means the boundary is sharper than average
+    const ratio = overallMeanMag > 0.001 ? boundaryMean / overallMeanMag : 0;
+    // Normalize: ratio of 1 → score 0, ratio of 4 → score 1
+    return Math.max(0, Math.min(1, (ratio - 1) / 3));
+}
+
+function computePerceptualSharpness(edges, w, h) {
+    // Tenengrad-based focus measure: variance of Sobel magnitudes
+    // Blurry images have low variance, sharp images have high variance
+    let sum = 0, sumSq = 0, count = 0;
+    for (let i = 0; i < w * h; i++) {
+        const v = edges[i];
+        if (v > 1) { // only count edge pixels
+            sum += v;
+            sumSq += v * v;
+            count++;
+        }
+    }
+    if (count < 100) return 0;
+    const mean = sum / count;
+    const variance = sumSq / count - mean * mean;
+    // Normalize: variance ~1000 is sharp (on 0-255 Sobel scale at 480px)
+    return Math.max(0, Math.min(1, variance / 3000));
+}
+
+// ============================
 //  Document Detection
 // ============================
 
@@ -589,7 +680,7 @@ function detectDocumentCorners(videoElem) {
     if (!vw || !vh) return null;
 
     // Downscale for performance
-    const maxDim = 240;
+    const maxDim = 480;
     const scale = Math.min(1, maxDim / Math.max(vw, vh));
     const w = Math.round(vw * scale);
     const h = Math.round(vh * scale);
@@ -600,14 +691,17 @@ function detectDocumentCorners(videoElem) {
     const imageData = overlayCtx.getImageData(0, 0, w, h);
     const gray = grayscale(imageData.data, w, h);
 
-    // 5×5 box blur to suppress text/background noise
-    const blurred = boxBlur(gray, w, h, 2);
+    // 3×3 box blur to suppress text/background noise
+    const blurred = boxBlurFast(gray, w, h, 1);
 
     // Sobel edge detection
     const edges = sobel(blurred, w, h);
 
-    // Adaptive threshold using 85th percentile
-    const thresh = percentileThreshold(edges, 0.85);
+    // Non-maximum suppression for thinner, cleaner edges
+    nonMaxSuppression(edges, blurred, w, h);
+
+    // Adaptive threshold using 78th percentile (more inclusive)
+    const thresh = percentileThreshold(edges, 0.78);
 
     // Boundary detection with consecutive-run filter + brightness transitions
     const { topPts, bottomPts, leftPts, rightPts } =
@@ -666,6 +760,20 @@ function detectDocumentCorners(videoElem) {
         (br.x * bl.y - bl.x * br.y) + (bl.x * tl.y - tl.x * bl.y)) / 2;
     if (area < (w * h) * 0.05) return null;
 
+    // Compute boundary sharpness: sample edge magnitudes along the 4 detected edges
+    // This ensures the document boundary is actually sharp (in-focus, real edge)
+    // and not a blurry transition or non-document object
+    let overallMeanMag = 0;
+    let edgeCount = 0;
+    for (let i = 0; i < w * h; i++) {
+        if (edges[i] > 1) { overallMeanMag += edges[i]; edgeCount++; }
+    }
+    overallMeanMag = edgeCount > 0 ? overallMeanMag / edgeCount : 0;
+
+    const detectCorners = [tl, tr, br, bl];
+    const boundarySharpness = computeBoundarySharpness(edges, w, h, detectCorners, overallMeanMag);
+    const perceptualSharpness = computePerceptualSharpness(edges, w, h);
+
     // Scale back to original video size
     const invScale = 1 / scale;
     const result = [
@@ -677,6 +785,10 @@ function detectDocumentCorners(videoElem) {
 
     // Attach quality score (0-1)
     result.quality = quadQualityScore(result, vw, vh);
+    // boundarySharpness: 0=blurry/soft edge, 1=very sharp edge
+    result.boundarySharpness = boundarySharpness;
+    // perceptualSharpness: 0=blurry image, 1=sharp image
+    result.perceptualSharpness = perceptualSharpness;
 
     return result;
 }
@@ -706,10 +818,10 @@ let cornerHistory = [];    // [{corners, quality}, ...] sliding window
 let stableFrames = 0;
 let noDocCount = 0;
 let lastDetectTime = 0;
-const DETECT_INTERVAL = 100;    // ms (≈10 fps)
+const DETECT_INTERVAL = 80;     // ms (≈12 fps)
 const MAX_HISTORY = 12;          // frames of corner history
-const STABLE_REQUIRED = 8;       // consecutive stable frames before capture
-const NO_DOC_LIMIT = 8;          // frames without doc before resetting
+const STABLE_REQUIRED = 7;       // consecutive stable frames before capture
+const NO_DOC_LIMIT = 10;         // frames without doc before resetting
 
 function startDetectionLoop() {
     if (state.animationId) return;
@@ -737,6 +849,8 @@ function startDetectionLoop() {
 
         if (result) {
             const quality = result.quality || 0.4;
+            const boundarySharpness = result.boundarySharpness || 0;
+            const perceptualSharpness = result.perceptualSharpness || 0;
             noDocCount = 0;
 
             // Smooth corners
@@ -751,8 +865,13 @@ function startDetectionLoop() {
             // Calculate stability (0-1) based on corner position variance
             const stability = calcStability(cornerHistory);
 
-            // State machine
-            if (quality > 0.25 && stability > 0.55) {
+            // State machine — require all 3: good geometry, sharp edges, sharp image
+            const hasGoodQuality = quality > 0.25;
+            const hasSharpEdges = boundarySharpness > 0.35;
+            const isInFocus = perceptualSharpness > 0.25;
+            const isStable = stability > 0.50;
+
+            if (hasGoodQuality && hasSharpEdges && isInFocus && isStable) {
                 // Good quality AND stable → STABLE
                 if (detectState === DETECT_STATE.STABLE) {
                     stableFrames++;
@@ -760,7 +879,7 @@ function startDetectionLoop() {
                     detectState = DETECT_STATE.STABLE;
                     stableFrames = 1;
                 }
-            } else if (quality > 0.15) {
+            } else if (quality > 0.10) {
                 // Detected but not yet stable → TRACKING
                 detectState = DETECT_STATE.TRACKING;
                 stableFrames = 0;
@@ -807,6 +926,8 @@ function startDetectionLoop() {
 
 function calcStability(history) {
     if (history.length < 4) return 0;
+    const vw = video.videoWidth || 1;
+    const vh = video.videoHeight || 1;
 
     const n = history[0].corners.length; // 4
     const m = history.length;
@@ -815,23 +936,26 @@ function calcStability(history) {
     for (let i = 0; i < n; i++) {
         let mx = 0, my = 0;
         for (let j = 0; j < m; j++) {
-            mx += history[j].corners[i].x;
-            my += history[j].corners[i].y;
+            // Normalize to [0,1] so variance is scale-independent
+            mx += history[j].corners[i].x / vw;
+            my += history[j].corners[i].y / vh;
         }
         mx /= m;
         my /= m;
 
         let vx = 0, vy = 0;
         for (let j = 0; j < m; j++) {
-            vx += (history[j].corners[i].x - mx) ** 2;
-            vy += (history[j].corners[i].y - my) ** 2;
+            const nx = history[j].corners[i].x / vw - mx;
+            const ny = history[j].corners[i].y / vh - my;
+            vx += nx * nx;
+            vy += ny * ny;
         }
         totalVar += (vx + vy) / m;
     }
 
     const avgVar = totalVar / (n * 2);
-    // avgVar ≈ 0.001 for very stable, ≈ 0.05 for jittery
-    return Math.max(0, Math.min(1, 1 - avgVar * 30));
+    // avgVar ≈ 0.00001 for very stable, ≈ 0.001 for jittery
+    return Math.max(0, Math.min(1, 1 - avgVar * 500));
 }
 
 function updateFrameStyle(state, stableCount, required) {
@@ -939,6 +1063,59 @@ function updateCornerOverlay(corners) {
 }
 
 // ============================
+//  Continuous Mode
+// ============================
+
+async function processContinuousCapture(photoW, photoH) {
+    // Apply auto-crop using detected corners (if available)
+    const page = state.pages[state.pages.length - 1];
+    if (!page || !state.adjustCorners) return;
+
+    try {
+        const img = await loadImage(page.dataUrl);
+        const iw = img.naturalWidth || photoW;
+        const ih = img.naturalHeight || photoH;
+
+        const srcCanvas = document.createElement('canvas');
+        srcCanvas.width = iw;
+        srcCanvas.height = ih;
+        const srcCtx = srcCanvas.getContext('2d');
+        srcCtx.drawImage(img, 0, 0);
+        const imageData = srcCtx.getImageData(0, 0, iw, ih);
+
+        const corners = state.adjustCorners.map(c => ({
+            x: c.x,
+            y: c.y,
+        }));
+
+        const cropped = perspectiveWarp(imageData, iw, ih, corners, null, null);
+        if (cropped) {
+            const outCanvas = document.createElement('canvas');
+            outCanvas.width = cropped.width;
+            outCanvas.height = cropped.height;
+            outCanvas.getContext('2d').putImageData(cropped, 0, 0);
+            page.dataUrl = outCanvas.toDataURL('image/jpeg', 0.92);
+        }
+    } catch (e) {
+        console.warn('Auto-crop in continuous mode failed:', e);
+        // Keep the uncropped image
+    }
+}
+
+function updateContinuousBadge() {
+    const bar = $('#continuous-bar');
+    const count = $('#continuous-count');
+    if (!bar || !count) return;
+    const total = state.pages.length;
+    if (total > 0 && state.scanMode === 'continuous') {
+        count.textContent = `已扫 ${total} 页`;
+        bar.style.display = 'flex';
+    } else {
+        bar.style.display = 'none';
+    }
+}
+
+// ============================
 //  Capture
 // ============================
 
@@ -1043,8 +1220,16 @@ async function performCapture() {
         state.pages.push({ dataUrl, filter: 'original' });
         state.activePage = state.pages.length - 1;
 
-        // Show the adjust screen
-        showAdjustScreen(dataUrl);
+        if (state.scanMode === 'continuous') {
+            // Continuous mode: auto-crop with detected corners & keep scanning
+            await processContinuousCapture(photoW, photoH);
+            updateContinuousBadge();
+            state.capturePending = false;
+            startDetectionLoop();
+        } else {
+            // Single mode: show adjust screen for manual tweaking
+            showAdjustScreen(dataUrl);
+        }
 
     } catch (err) {
         console.error('Capture error:', err);
@@ -1481,12 +1666,54 @@ function applyFilterToImage(imageData, filter) {
 
     switch (filter) {
         case 'gray': {
-            for (let i = 0; i < len; i++) {
+            const w = imageData.width;
+            const h = imageData.height;
+            const pix = w * h;
+
+            // 1. Convert to grayscale
+            const buf = new Float32Array(pix);
+            for (let i = 0; i < pix; i++) {
                 const idx = i * 4;
-                const gray = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-                data[idx] = gray;
-                data[idx + 1] = gray;
-                data[idx + 2] = gray;
+                buf[i] = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            }
+
+            // 2. Background estimation (large blur) for shadow removal
+            const bgRadius = Math.max(12, Math.floor(Math.min(w, h) / 12));
+            const background = boxBlurFast(buf, w, h, bgRadius);
+
+            // 3. Flatten lighting: corrected = gray - background + target brightness
+            let bgSum = 0;
+            for (let i = 0; i < pix; i++) bgSum += background[i];
+            const targetBg = Math.min(230, bgSum / pix + 15);
+            for (let i = 0; i < pix; i++) {
+                buf[i] = Math.max(0, Math.min(255, buf[i] - background[i] + targetBg));
+            }
+
+            // 4. Gentle contrast stretch (5%-95% percentile)
+            const hist = new Int32Array(256);
+            for (let i = 0; i < pix; i++) {
+                hist[Math.max(0, Math.min(255, Math.round(buf[i])))]++;
+            }
+            let cum = 0;
+            let p5 = 0, p95 = 255;
+            for (let i = 0; i < 256; i++) {
+                cum += hist[i];
+                if (p5 === 0 && cum >= pix * 0.05) p5 = i;
+                if (cum >= pix * 0.95) { p95 = i; break; }
+            }
+            const stretchRange = p95 - p5;
+            if (stretchRange > 15) {
+                const scale = 255 / stretchRange;
+                for (let i = 0; i < pix; i++) {
+                    buf[i] = Math.max(0, Math.min(255, (buf[i] - p5) * scale));
+                }
+            }
+
+            // 5. Write back to RGBA
+            for (let i = 0; i < pix; i++) {
+                const idx = i * 4;
+                const v = Math.round(buf[i]);
+                data[idx] = data[idx + 1] = data[idx + 2] = v;
             }
             break;
         }
@@ -1494,25 +1721,28 @@ function applyFilterToImage(imageData, filter) {
         case 'bw': {
             const w = imageData.width;
             const h = imageData.height;
-            const len = w * h;
-            // 1. Grayscale
-            const gray = new Float32Array(len);
-            for (let i = 0; i < len; i++) {
+            const pix = w * h;
+
+            // 1. Grayscale into reused buffer
+            const buf = new Float32Array(pix);
+            for (let i = 0; i < pix; i++) {
                 const idx = i * 4;
-                gray[i] = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                buf[i] = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
             }
             // 2. Light blur to suppress sensor noise
-            const blurred = boxBlur(gray, w, h, 1);
-            // 3. Background estimation via very large blur — captures
-            //    low-frequency shading from paper wrinkles / uneven light
-            const bgRadius = Math.max(16, Math.floor(Math.min(w, h) / 6));
+            const blurred = boxBlurFast(buf, w, h, 1);
+            // 3. Background estimation — large blur catches shading/wrinkles
+            const bgRadius = Math.max(16, Math.floor(Math.min(w, h) / 8));
             const background = boxBlurFast(blurred, w, h, bgRadius);
-            // 4. Background subtraction: corrected = blurred - background + 128
-            //    This flattens the shading so wrinkles don't trigger the threshold.
-            const corrected = new Float32Array(len);
-            for (let i = 0; i < len; i++) {
-                corrected[i] = Math.max(0, Math.min(255, blurred[i] - background[i] + 128));
+            // 4. Background subtraction → corrected = blurred - background + 140
+            //    140 (vs old 128) pushes paper brighter for cleaner output
+            //    buf is reused for corrected (buf is no longer needed as grayscale)
+            const corrected = buf;  // reuse buf buffer
+            for (let i = 0; i < pix; i++) {
+                corrected[i] = Math.max(0, Math.min(255, blurred[i] - background[i] + 140));
             }
+            // blurred and background are no longer needed (GC will free them)
+
             // 5. Integral image for O(1) local-mean queries
             const iw = w + 1, ih = h + 1;
             const integral = new Float32Array(iw * ih);
@@ -1526,10 +1756,11 @@ function applyFilterToImage(imageData, filter) {
                     integral[intOff + (x + 1)] = integral[intOffPrev + (x + 1)] + rowSum;
                 }
             }
-            // 6. Adaptive threshold
-            const blockSize = Math.max(32, Math.floor(Math.min(w, h) / 4));
+
+            // 6. Adaptive threshold with dynamic offset
+            //    Smaller block size (min/20 vs old min/4) for better local adaptation
+            const blockSize = Math.max(16, Math.floor(Math.min(w, h) / 20));
             const half = blockSize >> 1;
-            const offset = 14;  // slightly higher offset after background flattening
             for (let y = 0; y < h; y++) {
                 const y1 = Math.max(0, y - half);
                 const y2 = Math.min(h, y + half + 1);
@@ -1540,30 +1771,38 @@ function applyFilterToImage(imageData, filter) {
                               - integral[y2 * iw + x1] + integral[y1 * iw + x1];
                     const count = (x2 - x1) * (y2 - y1);
                     const localMean = sum / count;
+                    // Adaptive offset: brighter areas get more aggressive thresholding
+                    // Darker areas get gentler treatment to preserve strokes
+                    const adaptiveOffset = Math.max(6, Math.min(22, localMean * 0.08));
                     const idx = (y * w + x) * 4;
-                    const v = corrected[y * w + x] > (localMean - offset) ? 255 : 0;
+                    const v = corrected[y * w + x] > (localMean - adaptiveOffset) ? 255 : 0;
                     data[idx] = data[idx + 1] = data[idx + 2] = v;
                 }
             }
+
             // 7. Remove isolated noise pixels (salt & pepper)
-            for (let y = h - 2; y >= 1; y--) {
-                const rowOff = y * w;
-                for (let x = w - 2; x >= 1; x--) {
-                    const idx = rowOff + x;
-                    const v = data[idx * 4];
-                    let same = 0;
-                    const ni = idx - w - 1;
-                    if (data[ni * 4] === v) same++;
-                    if (data[(ni + 1) * 4] === v) same++;
-                    if (data[(ni + 2) * 4] === v) same++;
-                    if (data[(idx - 1) * 4] === v) same++;
-                    if (data[(idx + 1) * 4] === v) same++;
-                    if (data[(idx + w - 1) * 4] === v) same++;
-                    if (data[(idx + w) * 4] === v) same++;
-                    if (data[(idx + w + 1) * 4] === v) same++;
-                    if (same < 3) {
-                        const flip = v === 0 ? 255 : 0;
-                        data[idx * 4] = data[idx * 4 + 1] = data[idx * 4 + 2] = flip;
+            //    2-pass: first isolated black, then isolated white
+            for (let pass = 0; pass < 2; pass++) {
+                const targetVal = pass === 0 ? 0 : 255;
+                const flipVal = pass === 0 ? 255 : 0;
+                for (let y = h - 2; y >= 1; y--) {
+                    const rowOff = y * w;
+                    for (let x = w - 2; x >= 1; x--) {
+                        const idx = rowOff + x;
+                        if (data[idx * 4] !== targetVal) continue;
+                        let same = 0;
+                        const ni = idx - w - 1;
+                        if (data[ni * 4] === targetVal) same++;
+                        if (data[(ni + 1) * 4] === targetVal) same++;
+                        if (data[(ni + 2) * 4] === targetVal) same++;
+                        if (data[(idx - 1) * 4] === targetVal) same++;
+                        if (data[(idx + 1) * 4] === targetVal) same++;
+                        if (data[(idx + w - 1) * 4] === targetVal) same++;
+                        if (data[(idx + w) * 4] === targetVal) same++;
+                        if (data[(idx + w + 1) * 4] === targetVal) same++;
+                        if (same < 3) {
+                            data[idx * 4] = data[idx * 4 + 1] = data[idx * 4 + 2] = flipVal;
+                        }
                     }
                 }
             }
@@ -1571,48 +1810,84 @@ function applyFilterToImage(imageData, filter) {
         }
 
         case 'enhance': {
-            // Auto-enhance: increase contrast and sharpen
-            // First, compute histogram for contrast stretching
-            let min = 255, max = 0;
-            for (let i = 0; i < len; i++) {
-                const idx = i * 4;
-                const gray = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-                if (gray < min) min = gray;
-                if (gray > max) max = gray;
-            }
+            const w = imageData.width;
+            const h = imageData.height;
+            const pix = w * h;
 
-            const range = max - min;
-            if (range > 10) {
-                const scale = 255 / range;
-                for (let i = 0; i < len; i++) {
+            // ── Step 1: Shadow removal + background whitening ──
+            // Single Float32Array reused through steps to reduce memory
+            const buf = new Float32Array(pix);
+            for (let i = 0; i < pix; i++) {
+                const idx = i * 4;
+                buf[i] = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            }
+            const bgRadius = Math.max(16, Math.floor(Math.min(w, h) / 10));
+            const background = boxBlurFast(buf, w, h, bgRadius);
+
+            let bgSum = 0;
+            for (let i = 0; i < pix; i++) bgSum += background[i];
+            const bgMean = bgSum / pix;
+            const targetBg = Math.min(235, bgMean + 20);
+
+            // Per-channel correction: pixel = pixel - background + targetBg
+            for (let i = 0; i < pix; i++) {
+                const idx = i * 4;
+                for (let c = 0; c < 3; c++) {
+                    data[idx + c] = Math.max(0, Math.min(255,
+                        data[idx + c] - background[i] + targetBg));
+                }
+            }
+            // buf and background no longer needed for steps 2-4 (reuse buf)
+
+            // ── Step 2: Percentile-based contrast stretch ──
+            const hist = new Int32Array(256);
+            for (let i = 0; i < pix; i++) {
+                const idx = i * 4;
+                const g = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                hist[Math.max(0, Math.min(255, Math.round(g)))]++;
+            }
+            let cum = 0;
+            let p1 = 0, p99 = 255;
+            for (let i = 0; i < 256; i++) {
+                cum += hist[i];
+                if (p1 === 0 && cum >= pix * 0.005) p1 = i;
+                if (cum >= pix * 0.995) { p99 = i; break; }
+            }
+            const stretchRange = p99 - p1;
+            if (stretchRange > 15) {
+                const scale = 255 / stretchRange;
+                for (let i = 0; i < pix; i++) {
                     const idx = i * 4;
-                    data[idx] = Math.max(0, Math.min(255, (data[idx] - min) * scale));
-                    data[idx + 1] = Math.max(0, Math.min(255, (data[idx + 1] - min) * scale));
-                    data[idx + 2] = Math.max(0, Math.min(255, (data[idx + 2] - min) * scale));
+                    for (let c = 0; c < 3; c++) {
+                        data[idx + c] = Math.max(0, Math.min(255,
+                            (data[idx + c] - p1) * scale));
+                    }
                 }
             }
 
-            // Simple unsharp mask (sharpen)
-            const w = imageData.width;
-            const h = imageData.height;
-            const orig = new Uint8ClampedArray(data);
+            // ── Step 3: Slight saturation boost ──
+            for (let i = 0; i < pix; i++) {
+                const idx = i * 4;
+                const g = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+                for (let c = 0; c < 3; c++) {
+                    data[idx + c] = Math.max(0, Math.min(255,
+                        g + (data[idx + c] - g) * 1.15));
+                }
+            }
 
-            const strength = 0.3;
-            for (let y = 1; y < h - 1; y++) {
-                for (let x = 1; x < w - 1; x++) {
-                    const idx = (y * w + x) * 4;
-                    // 3x3 blur
-                    for (let c = 0; c < 3; c++) {
-                        let blur = 0;
-                        for (let dy = -1; dy <= 1; dy++) {
-                            for (let dx = -1; dx <= 1; dx++) {
-                                blur += orig[((y + dy) * w + (x + dx)) * 4 + c];
-                            }
-                        }
-                        blur /= 9;
-                        const sharpened = orig[idx + c] + strength * (orig[idx + c] - blur);
-                        data[idx + c] = Math.max(0, Math.min(255, sharpened));
-                    }
+            // ── Step 4: Unsharp mask via grayscale high-pass ──
+            // Reuse buf for grayscale, then blur into background (no longer needed)
+            for (let i = 0; i < pix; i++) {
+                const idx = i * 4;
+                buf[i] = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            }
+            const blurred = boxBlurFast(buf, w, h, 2);
+            for (let i = 0; i < pix; i++) {
+                const diff = buf[i] - blurred[i];
+                const idx = i * 4;
+                for (let c = 0; c < 3; c++) {
+                    data[idx + c] = Math.max(0, Math.min(255,
+                        data[idx + c] + 0.6 * diff));
                 }
             }
             break;
@@ -1666,10 +1941,16 @@ function renderFilteredPage(pageIndex) {
         // Defer processing so the overlay renders first
         requestAnimationFrame(() => {
             setTimeout(() => {
-                let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                imageData = applyFilterToImage(imageData, page.filter);
-                ctx.putImageData(imageData, 0, 0);
-                img.src = canvas.toDataURL('image/jpeg', 0.92);
+                try {
+                    let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    imageData = applyFilterToImage(imageData, page.filter);
+                    ctx.putImageData(imageData, 0, 0);
+                    img.src = canvas.toDataURL('image/jpeg', 0.92);
+                } catch (err) {
+                    console.error('Filter error:', err);
+                    // Fall back to original on error
+                    img.src = page.dataUrl;
+                }
                 hideProcessingOverlay();
             }, 20);
         });
@@ -1787,6 +2068,32 @@ function downloadBlob(blob, filename) {
 //  Event Handlers
 // ============================
 
+// ── Scan mode toggle ──
+function setScanMode(mode) {
+    state.scanMode = mode;
+    $('#btn-mode-single').classList.toggle('active', mode === 'single');
+    $('#btn-mode-continuous').classList.toggle('active', mode === 'continuous');
+    if (mode === 'continuous') {
+        updateContinuousBadge();
+    } else {
+        const bar = $('#continuous-bar');
+        if (bar) bar.style.display = 'none';
+    }
+}
+
+$('#btn-mode-single').addEventListener('click', () => setScanMode('single'));
+$('#btn-mode-continuous').addEventListener('click', () => setScanMode('continuous'));
+
+$('#btn-continuous-done').addEventListener('click', () => {
+    if (state.pages.length === 0) return;
+    stopDetectionLoop();
+    stopCamera();
+    // Ensure the continuous bar is hidden in preview
+    const bar = $('#continuous-bar');
+    if (bar) bar.style.display = 'none';
+    showPreviewScreen();
+});
+
 // Camera switch
 function updateCameraBtn() {
     const btn = $('#btn-switch-camera');
@@ -1821,7 +2128,8 @@ $('#btn-switch-camera').addEventListener('click', switchCamera);
 $('#btn-close').addEventListener('click', () => {
     stopCamera();
     stopDetectionLoop();
-    // The prompt shows again, or we just show the prompt
+    const bar = $('#continuous-bar');
+    if (bar) bar.style.display = 'none';
     showCameraPrompt();
 });
 
@@ -1880,42 +2188,48 @@ $('#btn-adjust-retake').addEventListener('click', () => {
 });
 
 $('#btn-adjust-done').addEventListener('click', () => {
-    // Apply perspective crop with current (user-adjusted) corners
-    if (adjustState.imageData) {
-        const corners = [];
-        for (let i = 0; i < 4; i++) {
-            corners.push({
-                x: adjustState.corners[i * 2] * adjustState.imgW,
-                y: adjustState.corners[i * 2 + 1] * adjustState.imgH,
-            });
+    try {
+        // Apply perspective crop with current (user-adjusted) corners
+        if (adjustState.imageData) {
+            const corners = [];
+            for (let i = 0; i < 4; i++) {
+                corners.push({
+                    x: adjustState.corners[i * 2] * adjustState.imgW,
+                    y: adjustState.corners[i * 2 + 1] * adjustState.imgH,
+                });
+            }
+
+            const cropped = perspectiveWarp(
+                adjustState.imageData,
+                adjustState.imgW,
+                adjustState.imgH,
+                corners,
+                null, null
+            );
+
+            if (cropped) {
+                const canvas = document.createElement('canvas');
+                canvas.width = cropped.width;
+                canvas.height = cropped.height;
+                const ctx = canvas.getContext('2d');
+                ctx.putImageData(cropped, 0, 0);
+                const newDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+
+                // Update the current page with the warped image
+                state.pages[state.pages.length - 1] = {
+                    ...state.pages[state.pages.length - 1],
+                    dataUrl: newDataUrl,
+                };
+            }
         }
 
-        const cropped = perspectiveWarp(
-            adjustState.imageData,
-            adjustState.imgW,
-            adjustState.imgH,
-            corners,
-            null, null
-        );
-
-        if (cropped) {
-            const canvas = document.createElement('canvas');
-            canvas.width = cropped.width;
-            canvas.height = cropped.height;
-            const ctx = canvas.getContext('2d');
-            ctx.putImageData(cropped, 0, 0);
-            const newDataUrl = canvas.toDataURL('image/jpeg', 0.92);
-
-            // Update the current page with the warped image
-            state.pages[state.pages.length - 1] = {
-                ...state.pages[state.pages.length - 1],
-                dataUrl: newDataUrl,
-            };
-        }
+        // Go to preview
+        showPreviewScreen();
+    } catch (err) {
+        console.error('Adjust done error:', err);
+        showToast('处理失败: ' + (err.message || err));
+        showPreviewScreen();
     }
-
-    // Go to preview
-    showPreviewScreen();
 });
 
 // Preview screen
@@ -1999,10 +2313,13 @@ $('#btn-preview-back').addEventListener('click', () => {
     showCameraPrompt();
 });
 
-$('#btn-preview-save').addEventListener('click', async () => {
+async function handleSavePDF() {
     const btn = $('#btn-preview-save');
+    const btn2 = $('#btn-save-pdf');
+    const origText = btn.textContent;
     btn.textContent = '生成中…';
     btn.disabled = true;
+    if (btn2) { btn2.textContent = '生成中…'; btn2.disabled = true; }
 
     const pdfBlob = await generatePDF(state.pages);
     if (pdfBlob) {
@@ -2010,9 +2327,13 @@ $('#btn-preview-save').addEventListener('click', async () => {
         showToast('PDF 已保存');
     }
 
-    btn.textContent = '存储';
+    btn.textContent = origText;
     btn.disabled = false;
-});
+    if (btn2) { btn2.textContent = '存储为 PDF'; btn2.disabled = false; }
+}
+
+$('#btn-preview-save').addEventListener('click', handleSavePDF);
+$('#btn-save-pdf').addEventListener('click', handleSavePDF);
 
 function formatDate() {
     const d = new Date();
@@ -2079,6 +2400,7 @@ $('#btn-auto').addEventListener('click', () => {
 // Add page from preview
 $('#btn-add-page').addEventListener('click', () => {
     showScreen('#screen-scanner');
+    if (state.scanMode === 'continuous') updateContinuousBadge();
     startDetectionLoop();
 });
 
@@ -2128,6 +2450,13 @@ function updatePageThumbnails() {
 
         scroll.appendChild(thumb);
     });
+
+    // Update page counter
+    const counter = $('#page-counter');
+    if (counter) {
+        counter.textContent = state.pages.length > 0 ?
+            `${state.activePage + 1} / ${state.pages.length}` : '';
+    }
 }
 
 // ============================

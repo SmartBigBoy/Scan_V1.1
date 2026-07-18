@@ -327,16 +327,76 @@ html, body {
     background: linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, transparent 100%);
 }
 
-#scanner-title {
-    font-size: 17px;
-    font-weight: 600;
-    letter-spacing: 0.2px;
+#notch-center {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 15px;
+    font-weight: 500;
+    color: #fff;
+}
+.mode-btn {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.5);
+    font-size: 15px;
+    font-weight: 500;
+    font-family: var(--font);
+    padding: 2px 4px;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+.mode-btn.active {
+    color: #fff;
+}
+#notch-divider {
+    color: rgba(255,255,255,0.25);
+    font-size: 14px;
 }
 
 #notch-right {
     display: flex;
     align-items: center;
     gap: 2px;
+}
+
+/* Continuous mode bar */
+#continuous-bar {
+    position: absolute;
+    top: calc(var(--safe-top) + var(--nav-height) + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 14px 6px 18px;
+    border-radius: 20px;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    white-space: nowrap;
+}
+#continuous-count {
+    font-size: 14px;
+    font-weight: 500;
+    color: #fff;
+    letter-spacing: 0.3px;
+}
+#btn-continuous-done {
+    background: var(--yellow);
+    border: none;
+    color: #000;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font);
+    padding: 5px 14px;
+    border-radius: 14px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+#btn-continuous-done:active {
+    opacity: 0.6;
 }
 
 .nav-btn {
@@ -654,28 +714,27 @@ html, body {
 #btn-preview-back {
     color: var(--blue);
     justify-content: flex-start;
+    min-width: 44px;
 }
 
 #btn-preview-save {
     color: var(--blue);
+    min-width: 44px;
 }
 
-/* Page thumbnails row */
+/* ── Page bar: thumbs + counter ── */
 #preview-pages {
     background: var(--gray-100);
-    padding: 10px 16px;
+    padding: 8px 12px;
     display: flex;
     align-items: center;
+    gap: 10px;
     border-bottom: 0.5px solid var(--gray-300);
     overflow-x: auto;
-    gap: 8px;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
 }
-
-#preview-pages::-webkit-scrollbar {
-    display: none;
-}
+#preview-pages::-webkit-scrollbar { display: none; }
 
 #pages-scroll {
     display: flex;
@@ -684,20 +743,24 @@ html, body {
 }
 
 .page-thumb {
-    width: 50px;
-    height: 64px;
-    border-radius: 6px;
+    width: 52px;
+    height: 66px;
+    border-radius: 8px;
     overflow: hidden;
     flex-shrink: 0;
-    border: 1.5px solid transparent;
+    border: 2px solid transparent;
     position: relative;
     cursor: pointer;
     background: var(--white);
-    transition: border-color 0.2s;
+    transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
-
+.page-thumb:active {
+    transform: scale(0.96);
+}
 .page-thumb.active {
     border-color: var(--blue);
+    box-shadow: 0 0 0 1px var(--blue), 0 2px 8px rgba(0,122,255,0.2);
 }
 
 .page-thumb img {
@@ -708,14 +771,14 @@ html, body {
 
 .page-thumb .page-delete {
     position: absolute;
-    top: -4px;
-    right: -4px;
-    width: 18px;
-    height: 18px;
+    top: -6px;
+    right: -6px;
+    width: 20px;
+    height: 20px;
     border-radius: 50%;
     background: var(--red);
-    color: white;
-    border: none;
+    color: #fff;
+    border: 2px solid var(--gray-100);
     font-size: 12px;
     cursor: pointer;
     display: flex;
@@ -723,40 +786,53 @@ html, body {
     justify-content: center;
     line-height: 1;
     padding: 0;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    box-shadow: 0 1px 4px rgba(255,59,48,0.35);
+    transition: transform 0.15s;
+}
+.page-thumb .page-delete:active {
+    transform: scale(0.85);
+}
+
+/* Page counter badge */
+#page-counter {
+    margin-left: auto;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--gray-500);
+    white-space: nowrap;
+    padding-right: 2px;
 }
 
 .add-page-btn {
-    width: 50px;
-    height: 64px;
-    border-radius: 6px;
-    border: 1.5px dashed var(--gray-400);
+    width: 52px;
+    height: 66px;
+    border-radius: 8px;
+    border: 2px dashed var(--gray-400);
     background: transparent;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 2px;
+    gap: 3px;
     cursor: pointer;
     flex-shrink: 0;
     color: var(--blue);
     font-size: 11px;
     font-weight: 500;
     font-family: var(--font);
-    transition: opacity 0.2s;
+    transition: background 0.15s, opacity 0.15s;
 }
-
 .add-page-btn:active {
     opacity: 0.5;
 }
 
-/* Preview main image */
+/* ── Main preview image ── */
 #preview-main {
     flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 12px;
+    padding: 16px;
     overflow: hidden;
     background: var(--gray-100);
 }
@@ -767,22 +843,23 @@ html, body {
     width: auto;
     height: auto;
     object-fit: contain;
-    border-radius: 8px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-    background: white;
+    border-radius: 10px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.06);
+    background: #fff;
 }
 
-/* Filter bottom sheet */
+/* ── Filter bottom sheet ── */
 #filter-sheet {
     background: var(--white);
     border-top: 0.5px solid var(--gray-300);
+    padding-top: 2px;
 }
 
 #filter-options {
     display: flex;
     justify-content: center;
-    gap: 20px;
-    padding: 12px 16px;
+    gap: 4px;
+    padding: 8px 12px 10px;
 }
 
 .filter-option {
@@ -796,30 +873,37 @@ html, body {
     font-family: var(--font);
     font-size: 11px;
     font-weight: 500;
-    color: var(--gray-600);
-    padding: 0;
-    transition: color 0.2s;
+    color: var(--gray-500);
+    padding: 6px 10px;
     min-width: 56px;
+    border-radius: 10px;
+    transition: color 0.2s, background 0.2s;
 }
 
 .filter-option.active {
     color: var(--blue);
+    background: rgba(0,122,255,0.08);
+}
+
+.filter-option:active {
+    background: rgba(0,0,0,0.04);
 }
 
 .filter-preview {
     width: 48px;
-    height: 64px;
-    border-radius: 6px;
+    height: 62px;
+    border-radius: 8px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1.5px solid var(--gray-300);
+    border: 1.5px solid var(--gray-200);
     overflow: hidden;
-    transition: border-color 0.2s;
+    transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .filter-option.active .filter-preview {
     border-color: var(--blue);
+    box-shadow: 0 0 0 0.5px var(--blue);
 }
 
 /* ============================
@@ -916,9 +1000,9 @@ html, body {
 /* Preview bottom actions */
 #preview-actions {
     display: flex;
-    gap: 12px;
-    padding: 12px 16px;
-    padding-bottom: calc(12px + var(--safe-bottom));
+    gap: 10px;
+    padding: 10px 16px;
+    padding-bottom: calc(10px + var(--safe-bottom));
     background: var(--white);
     border-top: 0.5px solid var(--gray-300);
 }
@@ -928,29 +1012,35 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    padding: 14px 20px;
+    gap: 6px;
+    padding: 13px 16px;
     border-radius: 12px;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
     font-family: var(--font);
     cursor: pointer;
     border: none;
-    transition: opacity 0.2s;
+    transition: transform 0.15s, background 0.2s;
 }
 
 .action-btn:active {
-    opacity: 0.7;
+    transform: scale(0.97);
 }
 
 .primary-btn {
     background: var(--blue);
     color: white;
 }
+.primary-btn:active {
+    background: #0066d6;
+}
 
 .secondary-btn {
     background: var(--gray-200);
     color: var(--blue);
+}
+.secondary-btn:active {
+    background: #d8d8dd;
 }
 
 /* ============================
@@ -1027,7 +1117,7 @@ body {
 }
 
 /* ============================
-   Dark mode for preview (matches iOS)
+   Dark mode for preview
    ============================ */
 @media (prefers-color-scheme: dark) {
     #screen-preview {
@@ -1049,6 +1139,14 @@ body {
         border-bottom-color: var(--gray-800);
     }
 
+    .page-thumb .page-delete {
+        border-color: var(--gray-900);
+    }
+
+    #page-counter {
+        color: var(--gray-500);
+    }
+
     #preview-main {
         background: var(--gray-900);
     }
@@ -1061,17 +1159,19 @@ body {
     .filter-option {
         color: var(--gray-400);
     }
-
     .filter-option.active {
         color: var(--yellow);
+        background: rgba(255,214,10,0.10);
     }
-
-    .filter-option.active .filter-preview {
-        border-color: var(--yellow);
+    .filter-option:active {
+        background: rgba(255,255,255,0.06);
     }
-
     .filter-preview {
         border-color: var(--gray-600);
+    }
+    .filter-option.active .filter-preview {
+        border-color: var(--yellow);
+        box-shadow: 0 0 0 0.5px var(--yellow);
     }
 
     #preview-actions {
@@ -1081,6 +1181,14 @@ body {
 
     .secondary-btn {
         background: var(--gray-700);
+        color: var(--yellow);
+    }
+    .secondary-btn:active {
+        background: #4a4a4e;
+    }
+
+    .add-page-btn {
+        border-color: var(--gray-600);
         color: var(--yellow);
     }
 }
